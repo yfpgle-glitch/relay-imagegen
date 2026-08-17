@@ -29,7 +29,7 @@ https://github.com/yfpgle-glitch/relay-imagegen
 
 ## 配置 Provider
 
-每个 Provider 使用独立的 API Key。环境变量优先于本地 Key 文件。
+每家服务使用独立的 API Key。环境变量优先于本地 Key 文件。
 
 | Provider | 标识 | 环境变量 | 本地 Key 文件 |
 |---|---|---|---|
@@ -56,23 +56,22 @@ API Key 不应发送到聊天中，也不要提交到 Git 仓库。
 - `使用 relay-imagegen 和这张遮罩图做局部编辑。`
 - `检查 CallAI 当前可用的图片模型，不要生成图片。`
 
-支持文本生成、参考图编辑、遮罩编辑和多参考图输入。默认模型为 `gpt-image-2`；具体分辨率、批量数量和输出格式以各 Provider 的实际能力为准。
+支持文本生成、参考图编辑、遮罩编辑和多参考图输入。默认模型为 `gpt-image-2`；具体模型、分辨率、批量数量和输出格式以所选 Provider 的实际结果为准。
 
-## Provider 选择
+## Provider 路由
 
-| Provider | 适合场景 | 当前限制 |
+| 标识 | 接口 | 能力 |
 |---|---|---|
-| `1pkapi` | 默认 Relay，支持高分辨率生成和编辑 | 账户余额和模型权限由 Provider 决定 |
-| `callai` | 需要 CallAI 路由或高分辨率输出 | 可用模型与模型列表不一定完全一致 |
-| `codex666ai` | 明确指定 Codex666 AI | 大尺寸和多图批量可能被限制 |
+| `1pkapi` | OpenAI-compatible Images | 默认 Relay；文本生成、参考图、遮罩和高分辨率输出 |
+| `callai` | OpenAI-compatible Images | 文本生成、参考图、遮罩和高分辨率输出 |
+| `codex666ai` | Codex666 OpenAI Images | `gpt-image-2` 文本生成和图片编辑 |
 
-生成和编辑通常会产生费用。执行前会检查所选 Provider 的可用模型；失败后不会静默切换到另一家 Provider。最新验证结果和完整参数见 [`SKILL.md`](SKILL.md)。
+生成和编辑通常会产生费用。执行前会检查所选 Provider 的可用模型。最新验证结果和完整参数见 [`SKILL.md`](SKILL.md)。
 
 ## 使用边界
 
 `relay-imagegen` 是专用 Relay 执行器，不是默认的第三方生图工具。
 
-- 明确指定 `relay-imagegen`、某个 Relay，或确实需要遮罩编辑等 Relay 专属能力时使用它。
-- 只说“用第三方工具生图”但没有指定 Provider 时，默认使用 [`rightcode-image`](https://github.com/yfpgle-glitch/right-code-imagegen)。
-- 不会自动改用 Codex 或 Claude Code 内置的图片生成器。
-- 不会在未经确认的情况下跨 Provider 重试或追加付费任务。
+- 明确指定 `relay-imagegen`、某个 Relay，或需要遮罩编辑等 Relay 专属能力时使用它。
+- 只说“用第三方工具生图”但没有指定 Provider 时，由 [`rightcode-image`](https://github.com/yfpgle-glitch/right-code-imagegen) 处理。
+- 每次任务固定使用当前选定的 Provider；跨 Provider 重试和新增付费任务需要单独明确。
