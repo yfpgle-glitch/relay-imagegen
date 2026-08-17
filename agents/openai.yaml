@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Image Generator"
+  short_description: "Use named API relays for mask editing or relay-only output needs"
+  default_prompt: "Use $relay-imagegen only with a named OpenAI-compatible relay or a verified relay-only image requirement, then display the saved result."
