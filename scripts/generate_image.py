@@ -19,6 +19,16 @@ import time
 from typing import Any, Mapping
 from urllib import error, parse, request
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from image_output_layout import (
+    ImageOutputLayout,
+    ImageOutputLayoutError,
+    find_project_root,
+    resolve_layout,
+)
+
 
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "1536x1024"
@@ -78,56 +88,6 @@ PROVIDERS: dict[str, Provider] = {
     ),
 }
 DEFAULT_PROVIDER = "1pkapi"
-PROJECT_MARKERS = (
-    ".git",
-    ".hg",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "package.json",
-    "pyproject.toml",
-    "Cargo.toml",
-    "go.mod",
-    "pom.xml",
-    "build.gradle",
-    "settings.gradle",
-    "composer.json",
-    "Gemfile",
-    "project.config.json",
-)
-
-
-def find_project_root(
-    start_dir: Path | None = None,
-    home: Path | None = None,
-) -> Path | None:
-    """Return the nearest marked project root without treating the home directory as a project."""
-    current = (Path.cwd() if start_dir is None else start_dir).expanduser().resolve()
-    home_dir = (Path.home() if home is None else home).expanduser().resolve()
-    for candidate in (current, *current.parents):
-        if candidate == home_dir:
-            break
-        if any((candidate / marker).exists() for marker in PROJECT_MARKERS):
-            return candidate
-    return None
-
-
-def default_output_dir(
-    provider: Provider,
-    cwd: Path | None = None,
-    platform_name: str | None = None,
-    home: Path | None = None,
-) -> Path:
-    """Choose a project-local directory, or a visible OS fallback when no project exists."""
-    home_dir = (Path.home() if home is None else home).expanduser().resolve()
-    project_root = find_project_root(cwd, home_dir)
-    if project_root is not None:
-        base = project_root / ".generated_images"
-    else:
-        platform_name = sys.platform if platform_name is None else platform_name
-        base = home_dir / ("Desktop" if platform_name.startswith("win") else "Downloads") / "generated_images"
-    return base / "third-party" / "relay" / provider.slug
-
-
 def resolve_provider(slug: str) -> Provider:
     provider = PROVIDERS.get(slug.strip().lower())
     if provider is None:
@@ -470,6 +430,9 @@ def _save_images(
     output_dir: Path,
     transport: Any,
     provider: Provider,
+    layout: ImageOutputLayout | None = None,
+    prompt: str = "",
+    metadata: Mapping[str, Any] | None = None,
 ) -> list[str]:
     label = provider.label
     items = _image_items(body)
@@ -488,8 +451,11 @@ def _save_images(
         if not image_bytes:
             raise ImageApiError(f"{label} returned an empty image")
         suffix = _extension(content_type, image_bytes, image_url)
-        path = output_dir / f"{_output_stem(provider, index)}{suffix}"
-        path.write_bytes(image_bytes)
+        if layout is not None:
+            path = layout.save_image(image_bytes, suffix, prompt, metadata or {})
+        else:
+            path = output_dir / f"{_output_stem(provider, index)}{suffix}"
+            path.write_bytes(image_bytes)
         files.append(str(path))
     return files
 
@@ -517,6 +483,7 @@ def generate(
     provider: Provider,
     base_url: str | None = None,
     transport: Any | None = None,
+    layout: ImageOutputLayout | None = None,
 ) -> dict[str, Any]:
     transport = transport or UrlLibTransport(label=provider.label)
     base_url = base_url or provider.base_url
@@ -530,7 +497,11 @@ def generate(
         payload=payload,
         stage="generate",
     )
-    files = _save_images(body, api_key, output_dir, transport, provider)
+    files = _save_images(
+        body, api_key, output_dir, transport, provider, layout,
+        str(payload.get("prompt") or ""),
+        {"provider": provider.label, "model": model, "size": payload.get("size"), "quality": payload.get("quality"), "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
+    )
 
     return {
         "provider": provider.slug,
@@ -565,6 +536,7 @@ def edit(
     mask_path: Path | None = None,
     base_url: str | None = None,
     transport: Any | None = None,
+    layout: ImageOutputLayout | None = None,
 ) -> dict[str, Any]:
     transport = transport or UrlLibTransport(label=provider.label)
     base_url = base_url or provider.base_url
@@ -578,7 +550,11 @@ def edit(
         files=_edit_files(image_paths, mask_path),
         stage="edit",
     )
-    files = _save_images(body, api_key, output_dir, transport, provider)
+    files = _save_images(
+        body, api_key, output_dir, transport, provider, layout,
+        str(payload.get("prompt") or ""),
+        {"provider": provider.label, "model": model, "size": payload.get("size"), "quality": payload.get("quality"), "operation": "edit", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
+    )
     return {
         "provider": provider.slug,
         "base_url": base_url,
@@ -704,8 +680,8 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Directory for generated files (default: "
-            "<project>/.generated_images/third-party/relay/<provider>; without a project, "
-            "~/Downloads/generated_images/... on macOS or ~/Desktop/generated_images/... on Windows)"
+            "<project>/generated_images/images/YYYY-MM-DD; without a project, "
+            "pass --output-dir explicitly)"
         ),
     )
     parser.add_argument("--list-models", action="store_true")
@@ -749,11 +725,10 @@ def main(argv: list[str] | None = None) -> int:
 
         provider = resolve_provider(args.provider)
         base_url = args.base_url or provider.base_url
-        output_dir = args.output_dir or default_output_dir(provider)
-        api_key = read_api_key(provider)
-        transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
 
         if args.list_models:
+            api_key = read_api_key(provider)
+            transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
             print(
                 json.dumps(
                     {
@@ -770,6 +745,14 @@ def main(argv: list[str] | None = None) -> int:
             raise ImageApiError("--prompt is required unless --list-models is used")
         if args.mask and not args.image:
             raise ImageApiError("--mask requires at least one --image")
+        try:
+            layout = resolve_layout(args.output_dir, task_namespace="relay")
+        except ImageOutputLayoutError as exc:
+            raise ImageApiError(str(exc)) from exc
+        layout.prepare()
+        output_dir = layout.images_dir
+        api_key = read_api_key(provider)
+        transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
         payload = build_payload(
             prompt=args.prompt,
             model=args.model or provider.default_model,
@@ -793,6 +776,7 @@ def main(argv: list[str] | None = None) -> int:
                 provider=provider,
                 base_url=base_url,
                 transport=transport,
+                layout=layout,
             )
         else:
             result = generate(
@@ -802,11 +786,19 @@ def main(argv: list[str] | None = None) -> int:
                 provider=provider,
                 base_url=base_url,
                 transport=transport,
+                layout=layout,
             )
         if args.aspect_ratio:
-            result["cropped_files"] = [
-                str(crop_to_ratio(Path(path), args.aspect_ratio)) for path in result["files"]
-            ]
+            cropped_files = []
+            for path in result["files"]:
+                cropped = crop_to_ratio(Path(path), args.aspect_ratio)
+                layout.write_prompt(
+                    cropped,
+                    args.prompt,
+                    {"provider": provider.label, "model": result["model"], "size": result["size"], "quality": result["quality"], "operation": f"{result['operation']} crop {args.aspect_ratio}", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds")},
+                )
+                cropped_files.append(str(cropped))
+            result["cropped_files"] = cropped_files
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except ImageApiError as exc:

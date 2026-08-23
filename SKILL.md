@@ -27,13 +27,16 @@ Read keys from the provider environment variable first, then its key file. Never
 
 ## Output location
 
-When `--output-dir` is omitted, save provider originals under:
+When `--output-dir` is omitted, both image skills use the same project-local structure:
 
-- `<project>/.generated_images/third-party/relay/<slug>` when a project root is detected.
-- `~/Downloads/generated_images/third-party/relay/<slug>` on macOS without a project.
-- `~/Desktop/generated_images/third-party/relay/<slug>` on Windows without a project.
+```text
+<project>/generated_images/
+  images/YYYY-MM-DD/YYYYMMDD-HHMMSS-NNN-content.png
+  prompts/YYYY-MM-DD/YYYYMMDD-HHMMSS-NNN-content.md
+  .tasks/relay/
+```
 
-An explicit `--output-dir` wins. `--aspect-ratio` creates a centered local crop while preserving the provider original.
+The image name sorts chronologically, and each image has a same-stem Markdown prompt record containing provider, model, requested size/quality, operation, timestamp, and full prompt. `generated_images/.gitignore` ignores generated artifacts. If no project root is detected, stop and request an explicit `--output-dir`; do not use Downloads, Desktop, or Codex internal directories. An explicit `--output-dir` wins and stores sidecars in hidden `.prompts` and `.tasks` directories. `--aspect-ratio` creates a centered local crop while preserving the provider original and writes a matching prompt record for the crop.
 
 ## Script location
 
@@ -82,7 +85,7 @@ Treat the downloaded artifact as the result of record. After generation:
 1. Measure dimensions with `sips -g pixelWidth -g pixelHeight <file>`.
 2. Check the actual format from file bytes rather than the requested extension.
 3. Preserve the original and display every result with an absolute Markdown image path.
-4. Report provider route, operation, model, requested size, actual pixels, quality when present, and returned count.
+4. Report provider route, operation, model, requested size, actual pixels, quality when present, returned count, and the matching prompt-file paths.
 
 ## Verified behavior
 

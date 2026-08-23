@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 from pathlib import Path
 import sys
 import tempfile
@@ -14,60 +15,47 @@ SPEC.loader.exec_module(CLIENT)
 
 
 class RelayOutputDirectoryTests(unittest.TestCase):
-    def test_project_defaults_use_separate_project_local_directories(self):
+    def test_project_defaults_use_shared_project_local_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / "home"
-            project = home / "work" / "demo"
+            project = Path(temporary) / "work" / "demo"
             nested = project / "src"
             nested.mkdir(parents=True)
             (project / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
-            callai = CLIENT.default_output_dir(
+            layout = CLIENT.resolve_layout(cwd=nested, task_namespace="relay")
+            self.assertEqual(
+                layout.images_dir,
+                (project / "generated_images" / "images" / layout.date_label).resolve(),
+            )
+            self.assertEqual(
+                layout.prompts_dir,
+                (project / "generated_images" / "prompts" / layout.date_label).resolve(),
+            )
+
+    def test_no_project_requires_explicit_output_dir(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(CLIENT.ImageOutputLayoutError):
+                CLIENT.resolve_layout(cwd=Path(temporary), task_namespace="relay")
+
+    def test_saved_image_has_matching_markdown_prompt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "project"
+            (root / ".git").mkdir(parents=True)
+            layout = CLIENT.resolve_layout(cwd=root, task_namespace="relay")
+            image_data = base64.b64encode(b"\x89PNG\r\n\x1a\nmock").decode("ascii")
+            files = CLIENT._save_images(
+                {"data": [{"b64_json": image_data}]},
+                "test-key",
+                layout.images_dir,
+                object(),
                 CLIENT.resolve_provider("callai"),
-                cwd=nested,
-                platform_name="darwin",
-                home=home,
+                layout,
+                "海报草案",
+                {"provider": "CallAI", "model": "gpt-image-2"},
             )
-            onepk = CLIENT.default_output_dir(
-                CLIENT.resolve_provider("1pkapi"),
-                cwd=nested,
-                platform_name="darwin",
-                home=home,
-            )
-            expected_root = project / ".generated_images" / "third-party" / "relay"
-            self.assertEqual(callai, (expected_root / "callai").resolve())
-            self.assertEqual(onepk, (expected_root / "1pkapi").resolve())
-            self.assertNotEqual(callai, onepk)
-            self.assertNotIn("outputs", callai.parts)
-
-    def test_no_project_uses_downloads_on_macos(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / "home"
-            home.mkdir()
-            provider = CLIENT.resolve_provider("callai")
-            self.assertEqual(
-                CLIENT.default_output_dir(
-                    provider,
-                    cwd=home,
-                    platform_name="darwin",
-                    home=home,
-                ),
-                (home / "Downloads" / "generated_images" / "third-party" / "relay" / "callai").resolve(),
-            )
-
-    def test_no_project_uses_desktop_on_windows(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / "home"
-            home.mkdir()
-            provider = CLIENT.resolve_provider("callai")
-            self.assertEqual(
-                CLIENT.default_output_dir(
-                    provider,
-                    cwd=home,
-                    platform_name="win32",
-                    home=home,
-                ),
-                (home / "Desktop" / "generated_images" / "third-party" / "relay" / "callai").resolve(),
-            )
+            image = Path(files[0])
+            self.assertTrue(image.is_file())
+            prompt = layout.prompts_dir / f"{image.stem}.md"
+            self.assertIn("海报草案", prompt.read_text(encoding="utf-8"))
 
     def test_explicit_output_dir_remains_available(self):
         with tempfile.TemporaryDirectory() as temporary:
