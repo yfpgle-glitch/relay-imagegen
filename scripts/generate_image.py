@@ -18,6 +18,7 @@ import sys
 import time
 from typing import Any, Mapping
 from urllib import error, parse, request
+from uuid import uuid4
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -35,6 +36,7 @@ DEFAULT_SIZE = "1536x1024"
 DEFAULT_QUALITY = "high"
 DEFAULT_OUTPUT_FORMAT = "png"
 USER_AGENT = "relay-imagegen/1.0"
+MEDIA_BASE_URL = "https://codex666ai.com:8443/media/v1"
 
 
 class ImageApiError(RuntimeError):
@@ -54,6 +56,15 @@ class Provider:
     default_quality: str = DEFAULT_QUALITY
 
 
+@dataclass(frozen=True)
+class MediaModel:
+    model_id: str
+    operations: frozenset[str]
+    sizes: tuple[str, ...]
+    qualities: tuple[str, ...]
+    max_n: int
+
+
 PROVIDERS: dict[str, Provider] = {
     "codex666ai": Provider(
         slug="codex666ai",
@@ -62,32 +73,11 @@ PROVIDERS: dict[str, Provider] = {
         env_var="CODEX666AI_API_KEY",
         key_path=Path.home() / ".config/codex666ai/api_key",
         key_hosts=("codex666ai.com",),
-    ),
-    "callai": Provider(
-        slug="callai",
-        label="CallAI",
-        base_url="https://sub.callai.one",
-        env_var="CALLAI_API_KEY",
-        key_path=Path.home() / ".config/callai/api_key",
-        key_hosts=("callai.one",),
-        # Tiered by size (2K 0.08, 4K 0.1); 4K costs 25% more for 4x the pixels.
-        default_size="4096x4096",
-        default_quality="high",
-    ),
-    "1pkapi": Provider(
-        slug="1pkapi",
-        label="皓悦API",
-        base_url="https://1pkapi.com",
-        env_var="ONEPK_API_KEY",
-        key_path=Path.home() / ".config/1pkapi/api_key",
-        key_hosts=("1pkapi.com",),
-        # Flat rate per call regardless of size/quality — always use max settings.
-        default_model="gpt-image-2",
-        default_size="4096x4096",
-        default_quality="high",
+        default_size="1K",
+        default_quality="medium",
     ),
 }
-DEFAULT_PROVIDER = "1pkapi"
+DEFAULT_PROVIDER = "codex666ai"
 def resolve_provider(slug: str) -> Provider:
     provider = PROVIDERS.get(slug.strip().lower())
     if provider is None:
@@ -157,6 +147,7 @@ class UrlLibTransport:
         api_key: str,
         payload: dict[str, Any] | None = None,
         stage: str = "request",
+        extra_headers: Mapping[str, str] | None = None,
     ) -> Any:
         data = None
         headers = {
@@ -167,6 +158,8 @@ class UrlLibTransport:
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        if extra_headers:
+            headers.update(extra_headers)
         req = request.Request(url, data=data, headers=headers, method=method)
         try:
             with request.urlopen(req, timeout=self.timeout) as response:
@@ -359,6 +352,71 @@ def list_models(
         stage="models",
     )
     return _extract_model_ids(body, getattr(transport, "label", "Image API"))
+
+
+def list_media_models(api_key: str, transport: Any | None = None) -> dict[str, MediaModel]:
+    transport = transport or UrlLibTransport(label="Codex666 AI")
+    body = transport.request_json("GET", f"{MEDIA_BASE_URL}/models", api_key, stage="media models")
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        raise ImageApiError("Codex666 AI media models response has no data list")
+    models: dict[str, MediaModel] = {}
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        operations = frozenset(str(value) for value in item.get("operations", []) if isinstance(value, str))
+        image = item.get("image") if isinstance(item.get("image"), dict) else {}
+        models[item["id"]] = MediaModel(
+            model_id=item["id"],
+            operations=operations,
+            sizes=tuple(str(value) for value in image.get("sizes", []) if isinstance(value, str)),
+            qualities=tuple(str(value) for value in image.get("qualities", []) if isinstance(value, str)),
+            max_n=int(image.get("max_n", 1)),
+        )
+    return models
+
+
+def _media_model(models: Mapping[str, MediaModel], model: str, operation: str, size: str, count: int) -> MediaModel:
+    record = models.get(model)
+    if record is None:
+        raise ImageApiError(f"Model {model!r} is not available to this Codex666 media key")
+    if operation not in record.operations:
+        raise ImageApiError(f"Model {model!r} does not support {operation}")
+    if size not in record.sizes:
+        raise ImageApiError(f"Model {model!r} does not support size {size!r}; supported: {', '.join(record.sizes)}")
+    if not 1 <= count <= record.max_n:
+        raise ImageApiError(f"Model {model!r} supports 1 to {record.max_n} images per request")
+    return record
+
+
+def media_quote(api_key: str, model: str, operation: str, size: str, count: int, transport: Any | None = None) -> Any:
+    transport = transport or UrlLibTransport(label="Codex666 AI")
+    return transport.request_json(
+        "POST", f"{MEDIA_BASE_URL}/quotes", api_key,
+        {"model": model, "operation": operation, "size": size, "n": count}, stage="media quote",
+    )
+
+
+def _media_payload(payload: Mapping[str, Any], record: MediaModel) -> dict[str, Any]:
+    result = {key: payload[key] for key in ("model", "prompt", "size", "n", "response_format") if payload.get(key) is not None}
+    quality = payload.get("quality")
+    if quality and record.qualities and quality in record.qualities:
+        result["quality"] = quality
+    return result
+
+
+def media_generate(api_key: str, payload: dict[str, Any], output_dir: Path, provider: Provider, transport: Any | None = None, layout: ImageOutputLayout | None = None) -> dict[str, Any]:
+    transport = transport or UrlLibTransport(label=provider.label)
+    model, size, count = str(payload["model"]), str(payload["size"]), int(payload["n"])
+    record = _media_model(list_media_models(api_key, transport), model, "image_generation", size, count)
+    quote = media_quote(api_key, model, "image_generation", size, count, transport)
+    body = transport.request_json(
+        "POST", f"{MEDIA_BASE_URL}/images/generations", api_key, _media_payload(payload, record), stage="media generate",
+        extra_headers={"Idempotency-Key": f"relay-imagegen-{uuid4()}"},
+    )
+    files = _save_images(body, api_key, output_dir, transport, provider, layout, str(payload.get("prompt") or ""),
+        {"provider": provider.label, "model": model, "size": size, "quality": payload.get("quality"), "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""})
+    return {"provider": provider.slug, "base_url": MEDIA_BASE_URL, "model": model, "size": size, "quality": payload.get("quality"), "files": files, "count": len(files), "operation": "generation", "quote": quote}
 
 
 def _is_provider_host(url: str, provider: Provider) -> bool:
@@ -640,7 +698,7 @@ def crop_to_ratio(path: Path, aspect_ratio: str) -> Path:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate images through an OpenAI-compatible Images API "
+        description="Generate images through the Codex666 AI media API "
         "and save provider originals locally."
     )
     parser.add_argument(
@@ -651,7 +709,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--prompt", help="Image prompt")
     parser.add_argument("--model", help=f"Defaults to the provider model ({DEFAULT_MODEL})")
-    parser.add_argument("--size", default=None, help="Defaults to the provider default size")
+    parser.add_argument("--size", default=None, help="Media size, such as 1K, 2K, or 4K; defaults to 1K")
     parser.add_argument("--quality", default=None, help="Defaults to the provider default quality")
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument(
@@ -663,18 +721,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--moderation", choices=("auto", "low"))
     parser.add_argument("--user", help="Optional upstream end-user identifier")
     parser.add_argument(
-        "--image",
-        type=Path,
-        action="append",
-        default=[],
-        help="Input image for editing; repeat for multiple images",
-    )
-    parser.add_argument("--mask", type=Path, help="Optional mask image for editing")
-    parser.add_argument(
         "--aspect-ratio",
         help="Optionally create a centered local crop such as 16:9; originals are preserved",
     )
-    parser.add_argument("--base-url", help="Override the provider base URL")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -685,6 +734,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--list-models", action="store_true")
+    parser.add_argument("--quote", action="store_true", help="Show the current price without creating an image")
     parser.add_argument(
         "--list-providers",
         action="store_true",
@@ -724,17 +774,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         provider = resolve_provider(args.provider)
-        base_url = args.base_url or provider.base_url
+        base_url = MEDIA_BASE_URL
+        api_key = read_api_key(provider)
+        transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
 
         if args.list_models:
-            api_key = read_api_key(provider)
-            transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
+            models = list_media_models(api_key, transport)
             print(
                 json.dumps(
-                    {
+                {
                         "provider": provider.slug,
                         "base_url": base_url,
-                        "models": list_models(api_key, base_url, transport),
+                        "models": [
+                            {"id": item.model_id, "operations": sorted(item.operations), "sizes": item.sizes, "qualities": item.qualities, "max_n": item.max_n}
+                            for item in models.values() if "image_generation" in item.operations
+                        ],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -743,16 +797,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not args.prompt:
             raise ImageApiError("--prompt is required unless --list-models is used")
-        if args.mask and not args.image:
-            raise ImageApiError("--mask requires at least one --image")
         try:
             layout = resolve_layout(args.output_dir, task_namespace="relay")
         except ImageOutputLayoutError as exc:
             raise ImageApiError(str(exc)) from exc
         layout.prepare()
         output_dir = layout.images_dir
-        api_key = read_api_key(provider)
-        transport = UrlLibTransport(timeout=args.timeout, label=provider.label)
         payload = build_payload(
             prompt=args.prompt,
             model=args.model or provider.default_model,
@@ -766,28 +816,19 @@ def main(argv: list[str] | None = None) -> int:
             moderation=args.moderation,
             user=args.user,
         )
-        if args.image:
-            result = edit(
-                api_key=api_key,
-                payload=payload,
-                image_paths=args.image,
-                mask_path=args.mask,
-                output_dir=output_dir,
-                provider=provider,
-                base_url=base_url,
-                transport=transport,
-                layout=layout,
-            )
-        else:
-            result = generate(
-                api_key=api_key,
-                payload=payload,
-                output_dir=output_dir,
-                provider=provider,
-                base_url=base_url,
-                transport=transport,
-                layout=layout,
-            )
+        payload["response_format"] = args.response_format or "url"
+        if args.quote:
+            _media_model(list_media_models(api_key, transport), payload["model"], "image_generation", payload["size"], payload["n"])
+            print(json.dumps(media_quote(api_key, payload["model"], "image_generation", payload["size"], payload["n"], transport), ensure_ascii=False, indent=2))
+            return 0
+        result = media_generate(
+            api_key=api_key,
+            payload=payload,
+            output_dir=output_dir,
+            provider=provider,
+            transport=transport,
+            layout=layout,
+        )
         if args.aspect_ratio:
             cropped_files = []
             for path in result["files"]:

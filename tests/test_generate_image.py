@@ -1,9 +1,12 @@
 import importlib.util
 import base64
+import contextlib
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 TARGET = Path(__file__).resolve().parents[1] / "scripts" / "generate_image.py"
@@ -15,6 +18,38 @@ SPEC.loader.exec_module(CLIENT)
 
 
 class RelayOutputDirectoryTests(unittest.TestCase):
+    def test_only_codex666_is_configured(self):
+        self.assertEqual(list(CLIENT.PROVIDERS), ["codex666ai"])
+        self.assertEqual(CLIENT.DEFAULT_PROVIDER, "codex666ai")
+        with self.assertRaises(CLIENT.ImageApiError):
+            CLIENT.resolve_provider("1pkapi")
+        with self.assertRaises(CLIENT.ImageApiError):
+            CLIENT.resolve_provider("callai")
+
+    def test_parser_does_not_accept_custom_base_url(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                CLIENT._parser().parse_args(["--base-url", "https://example.com"])
+
+    def test_model_preflight_uses_codex666_default_route(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(CLIENT, "read_api_key", return_value="test-key"),
+            mock.patch.object(
+                CLIENT,
+                "list_media_models",
+                return_value={
+                    "gpt-image-2": CLIENT.MediaModel(
+                        "gpt-image-2", frozenset({"image_generation"}), ("1K",), ("medium",), 1
+                    )
+                },
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(CLIENT.main(["--list-models"]), 0)
+        self.assertIn("https://codex666ai.com:8443/media/v1", output.getvalue())
+        self.assertIn("gpt-image-2", output.getvalue())
+
     def test_project_defaults_use_shared_project_local_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary) / "work" / "demo"
@@ -47,10 +82,10 @@ class RelayOutputDirectoryTests(unittest.TestCase):
                 "test-key",
                 layout.images_dir,
                 object(),
-                CLIENT.resolve_provider("callai"),
+                CLIENT.resolve_provider("codex666ai"),
                 layout,
                 "海报草案",
-                {"provider": "CallAI", "model": "gpt-image-2"},
+                {"provider": "Codex666 AI", "model": "gpt-image-2"},
             )
             image = Path(files[0])
             self.assertTrue(image.is_file())

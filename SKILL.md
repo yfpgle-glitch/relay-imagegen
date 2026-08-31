@@ -1,23 +1,19 @@
 ---
 name: relay-imagegen
-description: Generate and edit raster images through user-configured third-party relays that expose OpenAI-compatible Images APIs, then save and display provider originals. Use only when the user explicitly requests relay-imagegen, 1pkapi or 皓悦API, CallAI, Codex666 AI, another configured relay, a custom compatible base URL, or a verified relay-only capability such as mask editing. A generic third-party image request without a named provider defaults to rightcode-image. Do not use for Right Code's asynchronous draw API, DuckCoding, Gemini-native calls, or the host agent's built-in image generator.
+description: Generate raster images through Codex666 AI's Media API, then save and display provider originals. Use only when the user explicitly requests relay-imagegen or Codex666 AI. The default is gpt-image-2 at 1K; use another named Media API image model for 2K or 4K. Do not use for video, Right Code's asynchronous draw API, DuckCoding, Gemini-native calls, or the host agent's built-in image generator.
 ---
 
 # Relay Image Generator
 
-Use `scripts/generate_image.py` for named third-party relays. Keep each service's credentials, API route, and output directory separate.
+Use `scripts/generate_image.py` for Codex666 AI Media API image generation. Keep its credentials, API route, and output directory separate.
 
 ## Provider routes
 
-| Slug | Service route | Key | Default |
-|---|---|---|---|
-| `1pkapi` | `https://1pkapi.com/v1/images/*` | `ONEPK_API_KEY` or `~/.config/1pkapi/api_key` | `gpt-image-2`, `4096x4096`, `high` |
-| `callai` | `https://sub.callai.one/v1/images/*` | `CALLAI_API_KEY` or `~/.config/callai/api_key` | `gpt-image-2`, `4096x4096`, `high` |
-| `codex666ai` | `https://api.codex666ai.com/v1/images/*` | `CODEX666AI_API_KEY` or `~/.config/codex666ai/api_key` | `gpt-image-2`, `1536x1024`, `high` |
+| Service route | Key | Default |
+|---|---|---|
+| `https://codex666ai.com:8443/media/v1` | `CODEX666AI_API_KEY` or `~/.config/codex666ai/api_key` | `gpt-image-2`, `1K`, `medium` |
 
-Use the route named by the user. Within this skill, `1pkapi` is the default only when no relay slug was named. Keep the selected route after a failure; switching services or adding paid attempts requires explicit authorization.
-
-Use `codex666ai` only when the user explicitly names Codex666 AI.
+This skill always calls Codex666 AI Media API. It reads the live model directory and requests a quote before each image task. Do not change its API route or switch services; each additional paid attempt requires explicit authorization.
 
 ## Cost and authorization
 
@@ -58,25 +54,24 @@ python3 "$SCRIPT" --list-providers
 List models on one provider:
 
 ```bash
-python3 "$SCRIPT" --provider callai --list-models
+python3 "$SCRIPT" --provider codex666ai --list-models
 ```
 
 Generate through an OpenAI-compatible route:
 
 ```bash
-python3 "$SCRIPT" --provider callai \
+python3 "$SCRIPT" --model nano-banana-pro --size 2K \
   --prompt 'A cinematic orange cat astronaut in deep space'
 ```
 
-Edit one or more references through a verified editing route:
+Show a no-charge quote before a paid request:
 
 ```bash
-python3 "$SCRIPT" --provider callai \
-  --prompt 'Change the orange suit accents to bright blue' \
-  --image /absolute/path/source.png
+python3 "$SCRIPT" --model firefly-gpt-image-2 --size 4K \
+  --prompt 'A cinematic orange cat astronaut in deep space' --quote
 ```
 
-Append `--mask /absolute/path/mask.png` for masked editing. Repeat `--image` for multiple references.
+Video models are intentionally excluded from this skill.
 
 ## Verification rules
 
@@ -89,21 +84,16 @@ Treat the downloaded artifact as the result of record. After generation:
 
 ## Verified behavior
 
-The OpenAI-compatible routes were live-tested on 2026-08-13. Codex666 size behavior was rechecked on 2026-08-17.
+The current Media API model directory and quotes were rechecked on 2026-08-31. A `gpt-image-2` 1K request completed; requests to other models later received upstream HTTP 502 responses, so treat their live generation availability as unverified until the provider resolves that outage.
 
-| Behavior | `1pkapi` | `callai` | `codex666ai` |
-|---|---|---|---|
-| Generation | verified | verified | verified |
-| Reference edit | verified | verified | verified |
-| Mask edit | verified | verified | verified |
-| Multiple references | verified | verified | verified |
-| Two-image request | two files | two files | one file |
-| High-resolution artifact | 4096px and above verified | 4096px and above verified | 1254x1254 from both 2048x2048 and 4096x4096 requests |
-| Transparent background request | PNG with the provider-rendered background | PNG with the provider-rendered background | PNG with the provider-rendered background |
-| WebP request | PNG artifact | PNG artifact | PNG artifact |
+| Behavior | `codex666ai` |
+|---|---|
+| Generation | verified |
+| `gpt-image-2` 1K generation | verified, 1254x1254 PNG |
+| Other image models / 2K / 4K generation | model directory and quote verified; live generation pending provider 502 recovery |
 
 ## Response handling
 
 Accept `data[].url` and `data[].b64_json`. Download remote output before display. Send the bearer key only to the selected provider's own hosts.
 
-Return the operation stage, HTTP status, and provider message on errors. Keep already-saved files.
+Return the operation stage, HTTP status, quote, and provider message on errors. Keep already-saved files.
