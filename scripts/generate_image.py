@@ -731,8 +731,9 @@ def generate_batch(
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate images with Right Code."
+        description="Generate images through configured providers."
     )
+    parser.add_argument("--provider", choices=("rightcode", "teamorouter"), default="rightcode")
     parser.add_argument("--prompt", help="Image prompt (required for a new task)")
     parser.add_argument(
         "--resume-task-id",
@@ -810,6 +811,10 @@ def restore_legacy_checkpoint(layout: ImageOutputLayout, task_id: str) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         args = parse_args(argv)
+        if args.provider == "teamorouter":
+            from teamorouter_provider import run
+            print(json.dumps(run(args), ensure_ascii=False))
+            return 0
         try:
             layout = resolve_layout(args.output_dir, task_namespace="rightcode", provider="rightcode", model=args.model)
         except ImageOutputLayoutError as exc:

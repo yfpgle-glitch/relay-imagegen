@@ -29,9 +29,11 @@ A request to generate or edit authorizes the requested images. State the selecte
 
 **Primary provider:** Right Code is the default and preferred provider.
 
-Right Code is the only provider; failures should be reported without switching providers.
+Right Code and TeamoRouter are supported providers. Select the provider explicitly when needed.
 
 ## Keys
+
+| TeamoRouter | `TEAMOROUTER_API_KEY` | `~/.config/teamorouter/api_key` |
 
 Read keys internally; never print them or request them in chat.
 
