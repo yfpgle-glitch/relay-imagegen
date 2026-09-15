@@ -731,12 +731,8 @@ def generate_batch(
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate images with Right Code (default) or CallAI Images API."
+        description="Generate images with Right Code."
     )
-    parser.add_argument("--provider", choices=("rightcode", "callai"), default="rightcode")
-    parser.add_argument("--list-models", action="store_true", help="CallAI: free model directory")
-    parser.add_argument("--quote", action="store_true", help="CallAI: quote only; no image submission")
-    parser.add_argument("--quality", default=None, help="CallAI quality; default medium")
     parser.add_argument("--prompt", help="Image prompt (required for a new task)")
     parser.add_argument(
         "--resume-task-id",
@@ -814,16 +810,6 @@ def restore_legacy_checkpoint(layout: ImageOutputLayout, task_id: str) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         args = parse_args(argv)
-        if args.provider == "callai":
-            from callai_provider import run, ImageApiError
-            try:
-                result = run(args)
-            except (ImageApiError, ImageOutputLayoutError, OSError, TimeoutError) as exc:
-                raise RightCodeError(str(exc)) from exc
-            print(json.dumps(result, ensure_ascii=False))
-            return 2 if result.get("failed", 0) else 0
-        if args.list_models or args.quote or args.quality is not None:
-            raise RightCodeError("--list-models, --quote and --quality require --provider callai")
         try:
             layout = resolve_layout(args.output_dir, task_namespace="rightcode", provider="rightcode", model=args.model)
         except ImageOutputLayoutError as exc:
