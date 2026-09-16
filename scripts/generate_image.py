@@ -14,7 +14,7 @@ import sys
 import time
 import unicodedata
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -121,10 +121,13 @@ class UrlLibTransport:
             raise RightCodeError(
                 format_http_error(stage, method, url, exc.code, body)
             ) from exc
-        except URLError as exc:
+        except OSError as exc:
+            # URLError covers connection failures; a read timeout after the
+            # connection is established raises a bare TimeoutError instead.
             path = urlparse(url).path or "/"
+            reason = getattr(exc, "reason", exc)
             raise RightCodeError(
-                f"Right Code {stage} network error: {method} {path} -> {exc.reason}"
+                f"Right Code {stage} network error: {method} {path} -> {reason}"
             ) from exc
         try:
             parsed = json.loads(body.decode("utf-8"))
@@ -155,10 +158,12 @@ class UrlLibTransport:
             raise RightCodeError(
                 format_http_error("download", "GET", url, exc.code, body)
             ) from exc
-        except URLError as exc:
+        except OSError as exc:
+            # Same as request_json: read timeouts arrive as bare TimeoutError.
             path = urlparse(url).path or "/"
+            reason = getattr(exc, "reason", exc)
             raise RightCodeError(
-                f"Right Code download network error: GET {path} -> {exc.reason}"
+                f"Right Code download network error: GET {path} -> {reason}"
             ) from exc
 
 
