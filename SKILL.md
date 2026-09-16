@@ -5,7 +5,7 @@ description: Generate or edit images through Right Code. Use when the user selec
 
 # Right Code Image
 
-Use the bundled `scripts/generate_image.py` with Python 3. Right Code is the default; Do not change Codex `config.toml` to use either route. Resolve scripts relative to this skill, regardless of the current project directory.
+Use the bundled `scripts/generate_image.py` with Python 3. Right Code is the default; leave the Codex `config.toml` unchanged. Resolve scripts relative to this skill, regardless of the current project directory.
 
 ## Generate or edit
 
@@ -54,7 +54,7 @@ Use the original output root when resuming, including the same explicit `--outpu
 
 ## Output
 
-Both routes share the existing project-local layout:
+Outputs use the existing project-local layout:
 
 ```text
 <project>/output/images/
