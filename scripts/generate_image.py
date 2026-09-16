@@ -310,7 +310,18 @@ def _write_checkpoint(
     task_dir = task_dir.expanduser().resolve()
     task_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = task_dir / f"right-code-task-{_safe_task_id(task_id)}.json"
+    # Later writes (resuming/completed/...) must keep fields such as prompt
+    # and size recorded by earlier writes; resume reads them back.
+    previous: Dict[str, Any] = {}
+    if checkpoint.is_file():
+        try:
+            loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            previous = loaded
     payload = {
+        **previous,
         "task_id": task_id,
         "status": status,
         "model": model,
@@ -622,6 +633,11 @@ def generate(
         filename_stem or str(payload.get("prompt") or "right-code")
     )
     task_dir = task_dir or output_dir
+    size_label = " ".join(
+        str(part)
+        for part in (payload.get("size"), payload.get("imageSize"))
+        if part
+    )
     _write_checkpoint(
         task_dir,
         task_id,
@@ -629,7 +645,7 @@ def generate(
         model,
         filename_stem=image_stem,
         prompt=str(payload.get("prompt") or ""),
-        size=str(payload.get("size") or payload.get("image_size") or ""),
+        size=size_label,
     )
     return poll_task(
         api_key=api_key,
@@ -647,7 +663,7 @@ def generate(
         task_dir=task_dir,
         layout=layout,
         prompt=str(payload.get("prompt") or ""),
-        image_metadata={"provider": "Right Code", "model": model, "size": payload.get("size") or payload.get("image_size") or "", "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
+        image_metadata={"provider": "Right Code", "model": model, "size": size_label, "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
     )
 
 

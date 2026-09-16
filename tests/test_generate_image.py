@@ -82,7 +82,7 @@ class RightCodeFilenameTests(unittest.TestCase):
             )
             result = CLIENT.generate(
                 api_key="test-key",
-                payload={"model": "gpt-image-2", "prompt": "海报草案", "size": "16:9", "n": 1, "async": True},
+                payload={"model": "gpt-image-2", "prompt": "海报草案", "size": "16:9", "imageSize": "2K", "n": 1, "async": True},
                 output_dir=layout.images_dir,
                 task_dir=layout.task_dir,
                 layout=layout,
@@ -94,8 +94,13 @@ class RightCodeFilenameTests(unittest.TestCase):
             )
             image = Path(result["files"][0])
             self.assertEqual(image.name, "20260823-142530-001-海报草案.png")
-            self.assertTrue((layout.prompts_dir / "20260823-142530-001-海报草案.md").is_file())
-            self.assertTrue((layout.task_dir / "right-code-task-task-new.json").is_file())
+            prompt_file = layout.prompts_dir / "20260823-142530-001-海报草案.md"
+            self.assertTrue(prompt_file.is_file())
+            self.assertIn("- 尺寸: 16:9 2K", prompt_file.read_text(encoding="utf-8"))
+            checkpoint_file = layout.task_dir / "right-code-task-task-new.json"
+            self.assertTrue(checkpoint_file.is_file())
+            checkpoint = json.loads(checkpoint_file.read_text())
+            self.assertEqual(checkpoint["size"], "16:9 2K")
 
     def test_new_task_derives_filename_from_prompt(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -257,6 +262,45 @@ class RightCodeRecoveryTests(unittest.TestCase):
         args = CLIENT.parse_args(["--resume-task-id", "task-existing"])
         self.assertEqual(args.resume_task_id, "task-existing")
         self.assertIsNone(args.prompt)
+
+    def test_resume_records_size_and_prompt_from_interrupted_checkpoint(self):
+        transport = RecoveringTransport()
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            (project / ".git").mkdir(parents=True)
+            layout = CLIENT.resolve_layout(
+                cwd=project,
+                now=datetime(2026, 8, 23, 14, 25, 30),
+                task_namespace="rightcode",
+            )
+            CLIENT._write_checkpoint(
+                layout.task_dir,
+                "task-existing",
+                "submitted",
+                "gpt-image-2",
+                filename_stem="太空猫",
+                prompt="一只太空猫",
+                size="16:9 2K",
+            )
+            CLIENT.resume_task(
+                api_key="test-key",
+                task_id="task-existing",
+                output_dir=layout.images_dir,
+                poll_interval=0,
+                timeout=30,
+                poll_retries=2,
+                transport=transport,
+                sleep=lambda _: None,
+                monotonic=lambda: 0,
+                task_dir=layout.task_dir,
+                layout=layout,
+            )
+
+            prompt_files = list(layout.prompts_dir.glob("*.md"))
+            self.assertEqual(len(prompt_files), 1)
+            content = prompt_files[0].read_text(encoding="utf-8")
+            self.assertIn("- 尺寸: 16:9 2K", content)
+            self.assertIn("一只太空猫", content)
 
 
 class TransportNetworkErrorTests(unittest.TestCase):
