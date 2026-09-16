@@ -5,7 +5,7 @@
 **在 Codex、Claude Code 和 WorkBuddy 中使用 Right Code 生成和修改图片**
 
 ![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20WorkBuddy-202124?style=flat-square)
-![Provider](https://img.shields.io/badge/provider-Right%20Code%20%7C%20TeamoRouter-2563EB?style=flat-square)
+![Provider](https://img.shields.io/badge/provider-Right%20Code-2563EB?style=flat-square)
 ![Model](https://img.shields.io/badge/model-gpt--image--2-16A34A?style=flat-square)
 
 [GitHub 仓库](https://github.com/yfpgle-glitch/relay-imagegen) · 中文 · [English](README_EN.md)
@@ -53,14 +53,6 @@ https://github.com/yfpgle-glitch/relay-imagegen
 
 工具会打开一个隐藏输入框。粘贴 API Key，然后确认。输入时不会显示 Key。
 
-### TeamoRouter
-
-Relay also supports TeamoRouter’s OpenAI-compatible image API. Set `TEAMOROUTER_API_KEY` (or `~/.config/teamorouter/api_key`) and choose either `gpt-image-2.5-flare` or `gpt-image-2.5-sunburst`:
-
-```bash
-python3 scripts/generate_image.py --provider teamorouter --model gpt-image-2.5-flare --prompt "一只橘猫"
-```
-
 ## 使用
 
 直接告诉当前工具你想要什么：
@@ -73,4 +65,3 @@ python3 scripts/generate_image.py --provider teamorouter --model gpt-image-2.5-f
 默认使用 `gpt-image-2`、`16:9` 和 `1K`。你也可以指定其他比例或分辨率。
 
 每张图片会单独提交。一次生成多张图片，可能产生多次费用。
-

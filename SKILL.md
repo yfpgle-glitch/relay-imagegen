@@ -1,6 +1,6 @@
 ---
 name: relay-imagegen
-description: Generate or edit images through Right Code,. Use when the user selects Right Code, rightapi.ai, right.codes, or this skill, or an active image router selects Right Code. Also configure or check Right Code authentication. Do not override an explicit choice of the host's built-in image tool or another provider.
+description: Generate or edit images through Right Code. Use when the user selects Right Code, rightapi.ai, right.codes, or this skill, or an active image router selects Right Code. Also configure or check Right Code authentication. Do not override an explicit choice of the host's built-in image tool or another provider.
 ---
 
 # Right Code Image
@@ -29,11 +29,9 @@ A request to generate or edit authorizes the requested images. State the selecte
 
 **Primary provider:** Right Code is the default and preferred provider.
 
-Right Code and TeamoRouter are supported providers. Select the provider explicitly when needed.
+Right Code is the only provider in this Skill.
 
 ## Keys
-
-| TeamoRouter | `TEAMOROUTER_API_KEY` | `~/.config/teamorouter/api_key` |
 
 Read keys internally; never print them or request them in chat.
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Relay Image"
-  short_description: "Configure, generate, and edit with a configured image provider or TeamoRouter"
-  default_prompt: "Use $relay-imagegen to generate an image with a configured image provider and display the saved result."
+  short_description: "Configure, generate, and edit with Right Code"
+  default_prompt: "Use $relay-imagegen to generate an image with Right Code and display the saved result."
