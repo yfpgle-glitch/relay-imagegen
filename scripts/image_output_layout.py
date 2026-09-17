@@ -29,8 +29,9 @@ PROJECT_MARKERS = (
 MAX_SLUG_LENGTH = 48
 
 
-class ImageOutputLayoutError(RuntimeError):
-    """Raised when a default project-local image location cannot be determined."""
+def pictures_root(home: Path) -> Path:
+    """Personal library for generated images when no project root exists."""
+    return home / "Pictures" / "AI-generates-images"
 
 
 def find_project_root(start_dir: Path | None = None, home: Path | None = None) -> Path | None:
@@ -99,28 +100,7 @@ class ImageOutputLayout:
 
     @property
     def name_prefix(self) -> str:
-        base = self.timestamp.strftime("%Y%m%d-%H%M%S")
-        parts = [base]
-
-        # Provider abbreviation
-        if self.provider:
-            provider_map = {
-                "rightcode": "rc",
-                "right code": "rc",
-            }
-            provider_slug = provider_map.get(self.provider.lower(), self.provider.lower()[:3])
-            parts.append(provider_slug)
-
-        # Model slug (keep the full distinctive part)
-        if self.model:
-            # Remove common prefixes to keep it concise but distinctive
-            model_slug = self.model.lower()
-            # gpt-image-2.5 -> gpt-image-2.5
-            # nano-banana-2 -> nano-banana-2
-            # Keep the full model name, it's already distinctive
-            parts.append(model_slug)
-
-        return "-".join(parts)
+        return self.timestamp.strftime("%y%m%d-%H%M")
 
     def prepare(self) -> None:
         self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -143,19 +123,10 @@ class ImageOutputLayout:
             sequence += 1
 
     def save_image(self, content: bytes, suffix: str, filename_slug: str, metadata: Mapping[str, Any], original_prompt: str = "") -> Path:
-        """Save image with separate filename slug and original prompt for metadata.
-
-        Args:
-            content: Image binary content
-            suffix: File extension (e.g., ".png")
-            filename_slug: String to use for generating the filename
-            metadata: Metadata dict to save
-            original_prompt: Original prompt to save in the .md file (defaults to filename_slug if empty)
-        """
+        """Save image with separate filename slug and original prompt for metadata."""
         self.prepare()
         image = self.next_image_path(filename_slug, suffix)
         image.write_bytes(content)
-        # Use original_prompt for the .md file if provided, otherwise fall back to filename_slug
         prompt_to_save = original_prompt if original_prompt else filename_slug
         self.write_prompt(image, prompt_to_save, metadata)
         return image
@@ -164,7 +135,14 @@ class ImageOutputLayout:
         self.prepare()
         prompt_file = self.prompts_dir / f"{image.stem}.md"
         lines = [f"# {image.stem}", ""]
-        for label, key in (("服务商", "provider"), ("模型", "model"), ("尺寸", "size"), ("质量", "quality"), ("操作", "operation"), ("生成时间", "generated_at")):
+        for label, key in (
+            ("服务商", "provider"),
+            ("模型", "model"),
+            ("尺寸", "size"),
+            ("质量", "quality"),
+            ("操作", "operation"),
+            ("生成时间", "generated_at"),
+        ):
             value = metadata.get(key)
             if value is not None and _markdown_value(value):
                 lines.append(f"- {label}: {_markdown_value(value)}")
@@ -181,8 +159,10 @@ def resolve_layout(
     task_namespace: str,
     provider: str = "",
     model: str = "",
+    home: Path | None = None,
 ) -> ImageOutputLayout:
     timestamp = now or datetime.now()
+    home_dir = Path.home() if home is None else home
     if output_dir is not None:
         images_dir = output_dir.expanduser().resolve()
         return ImageOutputLayout(
@@ -193,12 +173,13 @@ def resolve_layout(
             provider=provider,
             model=model,
         )
-    project_root = find_project_root(cwd)
-    if project_root is None:
-        raise ImageOutputLayoutError(
-            "No project root was found. Run this command from a project directory or pass --output-dir explicitly."
-        )
-    root = project_root / "output" / "images"
+    project_root = find_project_root(cwd, home=home_dir)
+    if project_root is not None:
+        root = project_root / "output" / "images"
+    else:
+        # Outside any project: use the personal pictures library instead of
+        # refusing or guessing a random directory.
+        root = pictures_root(home_dir)
     return ImageOutputLayout(
         images_dir=root / timestamp.strftime("%Y-%m-%d"),
         prompts_dir=root / ".prompts" / timestamp.strftime("%Y-%m-%d"),

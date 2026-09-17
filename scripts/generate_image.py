@@ -23,7 +23,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from image_output_layout import (
     ImageOutputLayout,
-    ImageOutputLayoutError,
     content_slug,
     resolve_layout,
     find_project_root,
@@ -858,10 +857,7 @@ def restore_legacy_checkpoint(layout: ImageOutputLayout, task_id: str) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         args = parse_args(argv)
-        try:
-            layout = resolve_layout(args.output_dir, task_namespace="rightcode", provider="rightcode", model=args.model)
-        except ImageOutputLayoutError as exc:
-            raise RightCodeError(str(exc)) from exc
+        layout = resolve_layout(args.output_dir, task_namespace="rightcode", provider="rightcode", model=args.model)
         layout.prepare()
         spec = RunSpec(
             output_dir=layout.images_dir,

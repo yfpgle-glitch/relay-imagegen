@@ -60,16 +60,17 @@ Use the original output root when resuming, including the same explicit `--outpu
 
 ## Output
 
-Outputs use the existing project-local layout:
+Outputs use the project-local layout when a project root exists, otherwise the personal pictures library:
 
 ```text
-<project>/output/images/
-  YYYY-MM-DD/YYYYMMDD-HHMMSS-NNN-content.png
-  .prompts/YYYY-MM-DD/YYYYMMDD-HHMMSS-NNN-content.md
+<project>/output/images/          (inside a project)
+~/Pictures/AI-generates-images/   (no project root)
+  YYYY-MM-DD/YYMMDD-HHMM-NNN-content.png
+  .prompts/YYYY-MM-DD/YYMMDD-HHMM-NNN-content.md
   .tasks/rightcode/...
 ```
 
-The nearest Git/Mercurial root takes precedence over package markers. With no project root, supply `--output-dir`; never fall back to Downloads, Desktop or agent internal state. An explicit directory keeps hidden `.prompts` and `.tasks` sidecars. Existing artifacts are not deleted. Right Code still finds legacy `generated_images/.tasks/rightcode` checkpoints.
+The nearest Git/Mercurial root takes precedence over package markers. Pass `--output-dir` to place images anywhere explicitly; never fall back to Downloads, Desktop or agent internal state. An explicit directory keeps hidden `.prompts` and `.tasks` sidecars. Existing artifacts are not deleted. Right Code still finds legacy `generated_images/.tasks/rightcode` checkpoints.
 
 Prompt records contain the provider, model, size, operation, timestamp and full prompt, without secrets or temporary URLs. Task records may contain temporary image URLs for recovery. Generated artifacts are ignored by the managed output root's `.gitignore`.
 
