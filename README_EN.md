@@ -6,7 +6,7 @@
 
 ![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20WorkBuddy-202124?style=flat-square)
 ![Provider](https://img.shields.io/badge/provider-Right%20Code-2563EB?style=flat-square)
-![Model](https://img.shields.io/badge/model-gpt--image--2-16A34A?style=flat-square)
+![Model](https://img.shields.io/badge/model-gpt--image--2.5-16A34A?style=flat-square)
 
 [GitHub repository](https://github.com/yfpgle-glitch/relay-imagegen) · [中文](README.md) · English
 
@@ -62,6 +62,6 @@ Tell the current tool what you want:
 - `Use Right Code to generate three different versions.`
 - `Resume the Right Code task task_example.`
 
-The defaults are `gpt-image-2`, `16:9`, and `1K`. You can ask for another aspect ratio or resolution.
+The defaults are `gpt-image-2.5`, `16:9`, and `1K`. You can ask for another aspect ratio or resolution.
 
 Each image is submitted separately. Generating several images may result in several charges.

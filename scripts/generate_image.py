@@ -14,7 +14,7 @@ import sys
 import time
 import unicodedata
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -121,10 +121,13 @@ class UrlLibTransport:
             raise RightCodeError(
                 format_http_error(stage, method, url, exc.code, body)
             ) from exc
-        except URLError as exc:
+        except OSError as exc:
+            # URLError covers connection failures; a read timeout after the
+            # connection is established raises a bare TimeoutError instead.
             path = urlparse(url).path or "/"
+            reason = getattr(exc, "reason", exc)
             raise RightCodeError(
-                f"Right Code {stage} network error: {method} {path} -> {exc.reason}"
+                f"Right Code {stage} network error: {method} {path} -> {reason}"
             ) from exc
         try:
             parsed = json.loads(body.decode("utf-8"))
@@ -155,10 +158,12 @@ class UrlLibTransport:
             raise RightCodeError(
                 format_http_error("download", "GET", url, exc.code, body)
             ) from exc
-        except URLError as exc:
+        except OSError as exc:
+            # Same as request_json: read timeouts arrive as bare TimeoutError.
             path = urlparse(url).path or "/"
+            reason = getattr(exc, "reason", exc)
             raise RightCodeError(
-                f"Right Code download network error: GET {path} -> {exc.reason}"
+                f"Right Code download network error: GET {path} -> {reason}"
             ) from exc
 
 
@@ -305,7 +310,18 @@ def _write_checkpoint(
     task_dir = task_dir.expanduser().resolve()
     task_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = task_dir / f"right-code-task-{_safe_task_id(task_id)}.json"
+    # Later writes (resuming/completed/...) must keep fields such as prompt
+    # and size recorded by earlier writes; resume reads them back.
+    previous: Dict[str, Any] = {}
+    if checkpoint.is_file():
+        try:
+            loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            previous = loaded
     payload = {
+        **previous,
         "task_id": task_id,
         "status": status,
         "model": model,
@@ -617,6 +633,11 @@ def generate(
         filename_stem or str(payload.get("prompt") or "right-code")
     )
     task_dir = task_dir or output_dir
+    size_label = " ".join(
+        str(part)
+        for part in (payload.get("size"), payload.get("imageSize"))
+        if part
+    )
     _write_checkpoint(
         task_dir,
         task_id,
@@ -624,7 +645,7 @@ def generate(
         model,
         filename_stem=image_stem,
         prompt=str(payload.get("prompt") or ""),
-        size=str(payload.get("size") or payload.get("image_size") or ""),
+        size=size_label,
     )
     return poll_task(
         api_key=api_key,
@@ -642,7 +663,7 @@ def generate(
         task_dir=task_dir,
         layout=layout,
         prompt=str(payload.get("prompt") or ""),
-        image_metadata={"provider": "Right Code", "model": model, "size": payload.get("size") or payload.get("image_size") or "", "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
+        image_metadata={"provider": "Right Code", "model": model, "size": size_label, "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
     )
 
 

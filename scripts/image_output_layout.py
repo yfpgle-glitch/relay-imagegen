@@ -56,35 +56,26 @@ def find_project_root(start_dir: Path | None = None, home: Path | None = None) -
 def content_slug(value: str) -> str:
     """Convert content to a safe, readable filename slug.
 
-    Prioritizes ASCII characters to avoid encoding issues across systems.
-    For non-ASCII text (like Chinese), keeps only alphanumeric chars and converts to ASCII.
+    Prefers ASCII: accented latin characters are transliterated (café -> cafe).
+    Characters without an ASCII form (Chinese, Japanese, ...) are kept as-is.
     """
     normalized = unicodedata.normalize("NFKC", value or "").strip()
 
-    # Check if the string contains mostly ASCII
-    ascii_ratio = sum(1 for c in normalized if ord(c) < 128) / max(len(normalized), 1)
-
     characters: list[str] = []
     for character in normalized:
-        # Keep ASCII alphanumeric and some punctuation
         if character.isascii() and (character.isalnum() or character in "-_"):
             characters.append(character.lower())
-        # For non-ASCII alphanumeric (like Chinese), transliterate or skip
         elif character.isalnum():
-            # Try to transliterate to ASCII using NFKD decomposition
             decomposed = unicodedata.normalize("NFKD", character)
             ascii_chars = "".join(c for c in decomposed if c.isascii() and c.isalnum())
-            if ascii_chars:
-                characters.append(ascii_chars.lower())
-            # If no ASCII representation, use pinyin-style (just skip for now)
-            # A full solution would use a library like pypinyin for Chinese
+            characters.append(ascii_chars.lower() if ascii_chars else character)
         elif character.isspace() or character in "-_":
             characters.append("-")
 
     cleaned = re.sub(r"-+", "-", "".join(characters)).strip("-.")
     result = cleaned[:MAX_SLUG_LENGTH].rstrip("-.")
 
-    # If we end up with nothing (all non-ASCII with no transliteration), use generic name
+    # If we end up with nothing usable, use a generic name
     return result if result else "image"
 
 
