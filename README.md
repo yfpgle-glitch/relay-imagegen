@@ -1,11 +1,13 @@
 <div align="center">
 
-# Right Code Image
+# relay-imagegen
 
-**在 Codex、Claude Code 和 WorkBuddy 中使用 Right Code 生成和修改图片**
+**在 Codex、Claude Code 和 WorkBuddy 中，通过 RC 生成和修改图片**
+
+**RC（Right Code）** 是一个中转站：[rightapi.ai](https://www.rightapi.ai) 提供的 AI 生图 API 服务，中转 `gpt-image`、`nano-banana` 等模型。说 **RC** 就行。
 
 ![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20WorkBuddy-202124?style=flat-square)
-![Provider](https://img.shields.io/badge/provider-Right%20Code-2563EB?style=flat-square)
+![Provider](https://img.shields.io/badge/provider-RC%20%28Right%20Code%29-2563EB?style=flat-square)
 ![Model](https://img.shields.io/badge/model-gpt--image--2.5-16A34A?style=flat-square)
 
 [GitHub 仓库](https://github.com/yfpgle-glitch/relay-imagegen) · 中文 · [English](README_EN.md)
@@ -14,11 +16,11 @@
 
 ---
 
-## 安装 Skill
+## 一、安装 Skill
 
 需要 Python 3。没有的话，可以直接让 Codex、Claude Code 或 WorkBuddy 帮你安装。
 
-### Codex / Claude Code
+### 1、Codex / Claude Code
 
 把这句话发给 Codex 或 Claude Code：
 
@@ -29,41 +31,50 @@ https://github.com/yfpgle-glitch/relay-imagegen
 
 安装后，如果没有识别，重新打开一个任务或会话。
 
-### WorkBuddy
+### 2、WorkBuddy
 
 1. [下载 Skill 压缩包](https://github.com/yfpgle-glitch/relay-imagegen/archive/refs/heads/main.zip)。
 2. 在 WorkBuddy 中打开“添加技能”，选择“上传技能”。
 3. 上传刚刚下载的压缩包。
 
-## 创建 API Key
+## 二、创建 API Key
 
-1. [注册 Right Code](https://www.rightapi.ai/register?aff=9ec111f0) 并登录。（使用此链接注册，每次充值均可赠送 5% 额外额度。）
+1. [注册 RC（Right Code）](https://www.rightapi.ai/register?aff=9ec111f0) 并登录。（使用此链接注册，每次充值均可赠送 5% 额外额度。）
 2. 打开“令牌管理”。
 3. 点击“创建密钥”。
 
-不知道怎么操作，可以查看 [Right Code 官方 API Key 教程](https://docs.rightapi.ai/docs/rc_quick_start/apikey.html)。
+不知道怎么操作，可以查看 [RC 官方 API Key 教程](https://docs.rightapi.ai/docs/rc_quick_start/apikey.html)。
 
-## 配置 API Key
+## 三、配置 API Key
 
 安装完成后，对 Codex、Claude Code 或 WorkBuddy 说：
 
 ```text
-帮我配置 Right Code API Key。
+帮我配置 RC API Key。
 ```
 
 工具会打开一个隐藏输入框。粘贴 API Key，然后确认。输入时不会显示 Key。
 
-## 使用
+## 四、使用
 
 直接告诉当前工具你想要什么：
 
-- `使用 Right Code 生成一张电影感的 16:9 图片。`
-- `使用 Right Code 修改这张图片。`
-- `使用 Right Code 生成三种不同方案。`
-- `继续处理 Right Code 任务 task_example。`
+- `用 RC 生成一张电影感的 16:9 图片。`
+- `用 RC 修改这张图片。`
+- `用 RC 生成三种不同方案。`
+- `继续处理 RC 任务 task_example。`
 
 默认使用 `gpt-image-2.5`、`16:9` 和 `1K`。你也可以指定其他比例或分辨率。
 
 注意：`--image-size` 分辨率档位仅部分模型支持——`gpt-image-2-vip` 支持 2K/4K（16:9 实测 2048x1152 / 3840x2160）；`gpt-image-2.5` 和 `gpt-image-2` 会忽略该档位（16:9 恒定输出约 1672x940）。需要 2K/4K 时请指定 `--model gpt-image-2-vip` 或 `nano-banana-pro`。
 
 每张图片会单独提交。一次生成多张图片，可能产生多次费用。
+
+## 五、图片存放在哪
+
+生成的图片自动按日期归档：
+
+- 在项目内运行：`<项目>/output/images/YYYY-MM-DD/`
+- 在项目外运行：`~/Pictures/AI-generates-images/YYYY-MM-DD/`（macOS Finder、Windows 资源管理器的图片文件夹下均可见）
+
+文件名形如 `260917-1645-001-space-helmet-cat-cycling.png`（日期时间-序号-内容），同名 `.md` 记录模型、尺寸和完整提示词。也可以显式指定输出目录。
