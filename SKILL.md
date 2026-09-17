@@ -5,7 +5,7 @@ description: Generate or edit images through Right Code. Use when the user selec
 
 # Right Code Image
 
-Use the bundled `scripts/generate_image.py` with Python 3. Right Code is the default; Do not change Codex `config.toml` to use either route. Resolve scripts relative to this skill, regardless of the current project directory.
+Use the bundled `scripts/generate_image.py` with Python 3. Right Code is the default; leave the Codex `config.toml` unchanged. Resolve scripts relative to this skill, regardless of the current project directory.
 
 ## Generate or edit
 
@@ -14,6 +14,8 @@ python3 scripts/generate_image.py --prompt "一只戴着太空头盔的橘猫"
 ```
 
 Default: Right Code, `gpt-image-2.5`, `--size 16:9`, `--image-size 1K`.
+
+`--image-size` is model-dependent: `gpt-image-2-vip` honors 2K/4K (measured 2048x1152 / 3840x2160 at 16:9) and so does `nano-banana-pro`; `gpt-image-2.5` and `gpt-image-2` ignore the tier and render one fixed size per aspect ratio (1672x940 at 16:9). Use `--model gpt-image-2-vip` or `nano-banana-pro` when the user asks for 2K/4K.
 
 - Edit through Right Code by adding one `--reference /absolute/path/image.png` per reference.
 - Use `--count N` for N sequential single-image tasks. Provider field `n` stays 1.
@@ -54,7 +56,7 @@ Use the original output root when resuming, including the same explicit `--outpu
 
 ## Output
 
-Both routes share the existing project-local layout:
+Outputs use the existing project-local layout:
 
 ```text
 <project>/output/images/

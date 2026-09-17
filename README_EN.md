@@ -64,4 +64,6 @@ Tell the current tool what you want:
 
 The defaults are `gpt-image-2.5`, `16:9`, and `1K`. You can ask for another aspect ratio or resolution.
 
+Note: the `--image-size` tier is model-dependent — `gpt-image-2-vip` honors 2K/4K (measured 2048x1152 / 3840x2160 at 16:9), while `gpt-image-2.5` and `gpt-image-2` ignore it (fixed ~1672x940 at 16:9). Ask for `gpt-image-2-vip` or `nano-banana-pro` when you need 2K/4K.
+
 Each image is submitted separately. Generating several images may result in several charges.

@@ -64,4 +64,6 @@ https://github.com/yfpgle-glitch/relay-imagegen
 
 默认使用 `gpt-image-2.5`、`16:9` 和 `1K`。你也可以指定其他比例或分辨率。
 
+注意：`--image-size` 分辨率档位仅部分模型支持——`gpt-image-2-vip` 支持 2K/4K（16:9 实测 2048x1152 / 3840x2160）；`gpt-image-2.5` 和 `gpt-image-2` 会忽略该档位（16:9 恒定输出约 1672x940）。需要 2K/4K 时请指定 `--model gpt-image-2-vip` 或 `nano-banana-pro`。
+
 每张图片会单独提交。一次生成多张图片，可能产生多次费用。
