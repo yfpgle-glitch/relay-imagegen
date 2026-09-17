@@ -8,7 +8,7 @@
 ![Provider](https://img.shields.io/badge/provider-Right%20Code-2563EB?style=flat-square)
 ![Model](https://img.shields.io/badge/model-gpt--image--2-16A34A?style=flat-square)
 
-[GitHub 仓库](https://github.com/yfpgle-glitch/right-code-imagegen) · 中文 · [English](README_EN.md)
+[GitHub 仓库](https://github.com/yfpgle-glitch/relay-imagegen) · 中文 · [English](README_EN.md)
 
 </div>
 
@@ -24,14 +24,14 @@
 
 ```text
 请把这个仓库根目录作为 Skill 安装：
-https://github.com/yfpgle-glitch/right-code-imagegen
+https://github.com/yfpgle-glitch/relay-imagegen
 ```
 
 安装后，如果没有识别，重新打开一个任务或会话。
 
 ### WorkBuddy
 
-1. [下载 Skill 压缩包](https://github.com/yfpgle-glitch/right-code-imagegen/archive/refs/heads/main.zip)。
+1. [下载 Skill 压缩包](https://github.com/yfpgle-glitch/relay-imagegen/archive/refs/heads/main.zip)。
 2. 在 WorkBuddy 中打开“添加技能”，选择“上传技能”。
 3. 上传刚刚下载的压缩包。
 
@@ -65,16 +65,3 @@ https://github.com/yfpgle-glitch/right-code-imagegen
 默认使用 `gpt-image-2`、`16:9` 和 `1K`。你也可以指定其他比例或分辨率。
 
 每张图片会单独提交。一次生成多张图片，可能产生多次费用。
-
-## CallAI 备用（统一入口）
-
-默认仍使用 Right Code。现在无需安装 relay-imagegen，即可在同一入口选择 CallAI：
-
-```bash
-python3 scripts/generate_image.py --provider callai --list-models
-python3 scripts/generate_image.py --provider callai --prompt "一只橘猫" --quote
-python3 scripts/generate_image.py --provider callai --prompt "一只橘猫"
-```
-
-读取 `CALLAI_API_KEY` 或 `~/.config/callai/api_key`。仅接通 Media API 文生图，默认 gpt-image-2 / 1K / medium；编辑仍走 Right Code。两者复用项目 `output/images/`、提示词记录和原图校验。CallAI 下载失败可用返回检查点文件名中的 ID 配合 `--resume-task-id` 恢复；请求结果未知时不自动重提。不会静默切换供应商，也未加入其他中转站。
-

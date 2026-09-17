@@ -116,7 +116,6 @@ class ImageOutputLayout:
             provider_map = {
                 "rightcode": "rc",
                 "right code": "rc",
-                "callai": "ca",
             }
             provider_slug = provider_map.get(self.provider.lower(), self.provider.lower()[:3])
             parts.append(provider_slug)
