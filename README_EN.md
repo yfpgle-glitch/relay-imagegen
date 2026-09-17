@@ -4,7 +4,7 @@
 
 **Generate and edit images through RC in Codex, Claude Code, and WorkBuddy**
 
-**RC (Right Code)** is a relay — the AI image-generation API service at [rightapi.ai](https://www.rightapi.ai), relaying models such as `gpt-image` and `nano-banana`. Just say **RC**.
+**RC (Right Code)** is a relay — the AI image-generation API service at [rightapi.ai](https://www.rightapi.ai), relaying models such as `gpt-image` and `nano-banana`. Images from **$0.04 each** (default model $0.06/call; top-up rate 1$ = ¥1.00). Just say **RC**.
 
 ![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20WorkBuddy-202124?style=flat-square)
 ![Provider](https://img.shields.io/badge/provider-RC%20%28Right%20Code%29-2563EB?style=flat-square)
@@ -78,3 +78,18 @@ Generated images are archived by date automatically:
 - Outside any project: `~/Pictures/AI-generates-images/YYYY-MM-DD/` (visible in the macOS Finder and Windows File Explorer pictures folders)
 
 Filenames look like `260917-1645-001-space-helmet-cat-cycling.png` (timestamp-sequence-content), with a matching `.md` recording the model, size and full prompt. You can also pass an explicit output directory.
+
+## 6. Models & pricing
+
+Image generation is charged per call; top-up rate is 1$ = ¥1.00 (as of 2026-09, see the RC console for current prices):
+
+| Model | Price | Notes |
+|---|---:|---|
+| `gpt-image-2` | $0.04/call | Fixed size, cheapest |
+| `nano-banana-2-lite` | $0.05/call | |
+| `gpt-image-2.5` | **$0.06/call** | **Default model**; fixed ~1672x940 at 16:9 |
+| `nano-banana-2` | $0.12/call | |
+| `gpt-image-2-vip` | $0.13/call | Supports 2K/4K tiers |
+| `nano-banana-pro` | $0.18/call | Supports 2K/4K tiers |
+
+For 2K/4K pick `gpt-image-2-vip` or `nano-banana-pro`; the default `gpt-image-2.5` is fine for everyday images. See the RC console for the remaining models and up-to-date prices.

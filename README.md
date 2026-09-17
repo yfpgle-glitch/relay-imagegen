@@ -4,7 +4,7 @@
 
 **在 Codex、Claude Code 和 WorkBuddy 中，通过 RC 生成和修改图片**
 
-**RC（Right Code）** 是一个中转站：[rightapi.ai](https://www.rightapi.ai) 提供的 AI 生图 API 服务，中转 `gpt-image`、`nano-banana` 等模型。说 **RC** 就行。
+**RC（Right Code）** 是一个中转站：[rightapi.ai](https://www.rightapi.ai) 提供的 AI 生图 API 服务，中转 `gpt-image`、`nano-banana` 等模型。生图 **低至 $0.04/张**（默认模型 $0.06/张，充值 1$ = ¥1.00）。说 **RC** 就行。
 
 ![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20WorkBuddy-202124?style=flat-square)
 ![Provider](https://img.shields.io/badge/provider-RC%20%28Right%20Code%29-2563EB?style=flat-square)
@@ -78,3 +78,18 @@ https://github.com/yfpgle-glitch/relay-imagegen
 - 在项目外运行：`~/Pictures/AI-generates-images/YYYY-MM-DD/`（macOS Finder、Windows 资源管理器的图片文件夹下均可见）
 
 文件名形如 `260917-1645-001-space-helmet-cat-cycling.png`（日期时间-序号-内容），同名 `.md` 记录模型、尺寸和完整提示词。也可以显式指定输出目录。
+
+## 六、模型与价格
+
+生图按次计费，充值单价 1$ = ¥1.00（截至 2026-09，以 RC 后台价格为准）：
+
+| 模型 | 价格 | 说明 |
+|---|---:|---|
+| `gpt-image-2` | $0.04/次 | 固定尺寸，最低价 |
+| `nano-banana-2-lite` | $0.05/次 | |
+| `gpt-image-2.5` | **$0.06/次** | **默认模型**；16:9 恒定约 1672x940 |
+| `nano-banana-2` | $0.12/次 | |
+| `gpt-image-2-vip` | $0.13/次 | 支持 2K/4K 档位 |
+| `nano-banana-pro` | $0.18/次 | 支持 2K/4K 档位 |
+
+需要 2K/4K 时选 `gpt-image-2-vip` 或 `nano-banana-pro`；日常生图用默认的 `gpt-image-2.5` 即可。其余模型及最新价格见 RC 后台。
