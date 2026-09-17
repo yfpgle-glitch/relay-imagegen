@@ -51,7 +51,11 @@ python3 scripts/generate_image.py --resume-task-id TASK_ID
 
 Use the original output root when resuming, including the same explicit `--output-dir` if supplied.
 
-- Right Code resumes remote polling without resubmitting. The client retries transient polling errors with bounded backoff. If no task can be recovered, allow at most three total submissions per intended image under the original request; stop for authentication failures, unexpected cost or an uncertain submission outcome.
+- Right Code resumes remote polling without resubmitting. The client retries transient polling errors with bounded backoff.
+- Every failure prints one JSON object: `{"status": "error", "kind": ..., "message": ..., "checkpoint": ...}`. Exit code `2` means stop; exit code `3` means retryable — wait, then resume with `--resume-task-id TASK_ID`.
+- Stop kinds (exit `2`): `auth_error` (fix the key first), `submission_ambiguous` (submit outcome unknown — never resubmit blindly; check the Right Code console for a charged task before any new submission), `task_failed`, `unknown_status`, `bad_response`, `http_error`, `error`.
+- Retryable kinds (exit `3`): `transient_poll`, `poll_timeout`.
+- If no task can be recovered, allow at most three total submissions per intended image under the original request; stop for authentication failures, unexpected cost or an uncertain submission outcome.
 - Never combine resume with a new prompt, references or multiple outputs.
 
 ## Output

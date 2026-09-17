@@ -8,11 +8,11 @@ import base64
 import json
 import mimetypes
 import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 import sys
 import time
-import unicodedata
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from image_output_layout import (
     ImageOutputLayout,
     ImageOutputLayoutError,
+    content_slug,
     resolve_layout,
     find_project_root,
 )
@@ -38,11 +39,56 @@ FAILED = {"failed", "error", "cancelled", "canceled"}
 USER_AGENT = "rightcode-image-skill/2.0"
 DEFAULT_POLL_RETRIES = 5
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"}
-MAX_FILENAME_STEM_LENGTH = 48
 
 
 class RightCodeError(RuntimeError):
-    """A safe, user-facing Right Code client error."""
+    """A safe, user-facing Right Code client error.
+
+    kind carries the recovery policy documented in SKILL.md so agents branch
+    on machine-readable output instead of matching message strings.
+    checkpoint points at the task record saved before raising, when one exists.
+    """
+
+    kind = "error"
+
+    def __init__(self, message: str, *, checkpoint: Optional[str] = None):
+        super().__init__(message)
+        self.checkpoint = checkpoint
+
+
+class AuthenticationError(RightCodeError):
+    kind = "auth_error"
+
+
+class SubmissionAmbiguousError(RightCodeError):
+    kind = "submission_ambiguous"
+
+
+class TransientPollError(RightCodeError):
+    kind = "transient_poll"
+
+
+class PollTimeoutError(RightCodeError):
+    kind = "poll_timeout"
+
+
+class TaskFailedError(RightCodeError):
+    kind = "task_failed"
+
+
+class UnknownStatusError(RightCodeError):
+    kind = "unknown_status"
+
+
+class BadResponseError(RightCodeError):
+    kind = "bad_response"
+
+
+class HttpError(RightCodeError):
+    kind = "http_error"
+
+
+RETRYABLE_KINDS = frozenset({"transient_poll", "poll_timeout"})
 
 
 def read_api_key(
@@ -54,7 +100,7 @@ def read_api_key(
     if not api_key and key_path.is_file():
         api_key = key_path.read_text(encoding="utf-8").strip()
     if not api_key:
-        raise RightCodeError(
+        raise AuthenticationError(
             "Right Code API key is missing. Put it in "
             f"{key_path} or set RIGHT_CODES_API_KEY for this process."
         )
@@ -118,7 +164,15 @@ class UrlLibTransport:
                 body = response.read()
         except HTTPError as exc:
             body = exc.read()
-            raise RightCodeError(
+            if exc.code in (401, 403):
+                raise AuthenticationError(
+                    format_http_error(stage, method, url, exc.code, body)
+                ) from exc
+            if exc.code >= 500 and stage == "poll":
+                raise TransientPollError(
+                    format_http_error(stage, method, url, exc.code, body)
+                ) from exc
+            raise HttpError(
                 format_http_error(stage, method, url, exc.code, body)
             ) from exc
         except OSError as exc:
@@ -126,6 +180,16 @@ class UrlLibTransport:
             # connection is established raises a bare TimeoutError instead.
             path = urlparse(url).path or "/"
             reason = getattr(exc, "reason", exc)
+            if stage == "submit":
+                # The request may or may not have reached the provider, so a
+                # resubmission could double-charge; never auto-retry here.
+                raise SubmissionAmbiguousError(
+                    f"Right Code {stage} network error: {method} {path} -> {reason}"
+                ) from exc
+            if stage == "poll":
+                raise TransientPollError(
+                    f"Right Code {stage} network error: {method} {path} -> {reason}"
+                ) from exc
             raise RightCodeError(
                 f"Right Code {stage} network error: {method} {path} -> {reason}"
             ) from exc
@@ -133,11 +197,13 @@ class UrlLibTransport:
             parsed = json.loads(body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             path = urlparse(url).path or "/"
-            raise RightCodeError(
+            raise BadResponseError(
                 f"Right Code {stage} returned invalid JSON for {method} {path}."
             ) from exc
         if not isinstance(parsed, dict):
-            raise RightCodeError(f"Right Code {stage} returned an unexpected JSON value.")
+            raise BadResponseError(
+                f"Right Code {stage} returned an unexpected JSON value."
+            )
         return parsed
 
     def download(self, url: str, api_key: str) -> Tuple[bytes, str]:
@@ -155,14 +221,23 @@ class UrlLibTransport:
                 return response.read(), content_type
         except HTTPError as exc:
             body = exc.read()
-            raise RightCodeError(
+            if exc.code in (401, 403):
+                raise AuthenticationError(
+                    format_http_error("download", "GET", url, exc.code, body)
+                ) from exc
+            if exc.code >= 500:
+                raise TransientPollError(
+                    format_http_error("download", "GET", url, exc.code, body)
+                ) from exc
+            raise HttpError(
                 format_http_error("download", "GET", url, exc.code, body)
             ) from exc
         except OSError as exc:
             # Same as request_json: read timeouts arrive as bare TimeoutError.
+            # A failed download is recoverable by resuming the same task.
             path = urlparse(url).path or "/"
             reason = getattr(exc, "reason", exc)
-            raise RightCodeError(
+            raise TransientPollError(
                 f"Right Code download network error: GET {path} -> {reason}"
             ) from exc
 
@@ -241,26 +316,6 @@ def _safe_task_id(task_id: str) -> str:
     return cleaned or "task"
 
 
-def _filename_stem(value: str) -> str:
-    """Turn a prompt or user-provided title into a readable cross-platform stem."""
-    normalized = unicodedata.normalize("NFKC", value or "").strip()
-    suffix = Path(normalized).suffix.lower()
-    if suffix in IMAGE_EXTENSIONS:
-        normalized = normalized[: -len(suffix)]
-
-    characters = []
-    for character in normalized:
-        if character.isalnum():
-            characters.append(character)
-        elif character.isspace() or character in {"-", "_"}:
-            characters.append("-")
-        else:
-            characters.append("-")
-    cleaned = re.sub(r"-+", "-", "".join(characters)).strip("-.")
-    cleaned = cleaned[:MAX_FILENAME_STEM_LENGTH].rstrip("-.")
-    return cleaned or "right-code"
-
-
 def _extension(content_type: str, url: str = "") -> str:
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix in IMAGE_EXTENSIONS:
@@ -282,9 +337,9 @@ def _validate_image_bytes(content: bytes, content_type: str) -> None:
         len(content) >= 12 and content[4:12] in {b"ftypavif", b"ftypavis"},
     )
     if not content:
-        raise RightCodeError("Right Code returned an empty image file.")
+        raise BadResponseError("Right Code returned an empty image file.")
     if not any(signatures) and not content_type.lower().startswith("image/"):
-        raise RightCodeError(
+        raise BadResponseError(
             f"Right Code returned non-image content ({content_type or 'unknown type'})."
         )
 
@@ -293,11 +348,11 @@ def _decode_base64(value: str) -> bytes:
     if value.startswith("data:"):
         _, separator, value = value.partition(",")
         if not separator:
-            raise RightCodeError("Right Code returned an invalid image data URL.")
+            raise BadResponseError("Right Code returned an invalid image data URL.")
     try:
         return base64.b64decode(value, validate=True)
     except (ValueError, TypeError) as exc:
-        raise RightCodeError("Right Code returned invalid base64 image data.") from exc
+        raise BadResponseError("Right Code returned invalid base64 image data.") from exc
 
 
 def _write_checkpoint(
@@ -351,34 +406,19 @@ def _checkpoint_value(task_dir: Path, task_id: str, key: str) -> Optional[str]:
 
 def _checkpoint_filename_stem(task_dir: Path, task_id: str) -> Optional[str]:
     value = _checkpoint_value(task_dir, task_id, "filename_stem")
-    return _filename_stem(value) if value else None
-
-
-def _next_image_path(output_dir: Path, stem: str, suffix: str, timestamp: str) -> Path:
-    sequence = 1
-    while True:
-        candidate = output_dir / f"{stem}-{timestamp}-{sequence}{suffix}"
-        if not candidate.exists():
-            return candidate
-        sequence += 1
+    return content_slug(value) if value else None
 
 
 def _save_results(
     values: Sequence[Tuple[str, str, str]],
-    task_id: str,
-    output_dir: Path,
     api_key: str,
     transport: Any,
+    layout: ImageOutputLayout,
     filename_stem: Optional[str] = None,
-    layout: Optional[ImageOutputLayout] = None,
     prompt: str = "",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
-    output_dir = output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
     files: List[str] = []
-    stem = _filename_stem(filename_stem or "right-code")
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
     for kind, value, declared_type in values:
         if kind == "url":
             content, content_type = transport.download(value, api_key)
@@ -388,13 +428,9 @@ def _save_results(
             content_type = declared_type or "image/png"
             suffix = _extension(content_type)
         _validate_image_bytes(content, content_type)
-        if layout is not None:
-            # Use filename_stem for the filename if provided, otherwise fall back to prompt
-            name_source = filename_stem if filename_stem else prompt
-            path = layout.save_image(content, suffix, name_source, metadata or {}, original_prompt=prompt)
-        else:
-            path = _next_image_path(output_dir, stem, suffix, timestamp)
-            path.write_bytes(content)
+        # filename_stem wins when the user supplied one; otherwise name by prompt
+        name_source = filename_stem or prompt
+        path = layout.save_image(content, suffix, name_source, metadata or {}, original_prompt=prompt)
         files.append(str(path))
     return files
 
@@ -410,53 +446,66 @@ def _task_error_message(task: Dict[str, Any]) -> str:
     return "Right Code image task failed."
 
 
+@dataclass(frozen=True)
+class RunSpec:
+    """Everything one run needs besides the request payload and api key."""
+
+    output_dir: Path
+    layout: ImageOutputLayout
+    task_dir: Optional[Path] = None
+    poll_interval: float = 3.0
+    timeout: float = 600.0
+    poll_retries: int = DEFAULT_POLL_RETRIES
+    filename_stem: Optional[str] = None
+
+
 def poll_task(
     api_key: str,
     task_id: str,
-    output_dir: Path,
-    poll_interval: float,
-    timeout: float,
-    model: str = "gpt-image-2.5",
-    filename_stem: Optional[str] = None,
+    spec: RunSpec,
+    *,
+    model: str,
+    prompt: str = "",
+    size_label: str = "",
     initial_task: Optional[Dict[str, Any]] = None,
-    poll_retries: int = DEFAULT_POLL_RETRIES,
     transport: Optional[Any] = None,
     sleep: Any = time.sleep,
     monotonic: Any = time.monotonic,
-    task_dir: Optional[Path] = None,
-    layout: Optional[ImageOutputLayout] = None,
-    prompt: str = "",
-    image_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    if poll_interval < 0:
+    if spec.poll_interval < 0:
         raise RightCodeError("Poll interval cannot be negative.")
-    if timeout <= 0:
+    if spec.timeout <= 0:
         raise RightCodeError("Timeout must be greater than zero.")
-    if poll_retries < 0:
+    if spec.poll_retries < 0:
         raise RightCodeError("Poll retries cannot be negative.")
     if not task_id:
         raise RightCodeError("Right Code task ID is required.")
     transport = transport or UrlLibTransport()
-    task_dir = task_dir or output_dir
+    task_dir = spec.task_dir or spec.output_dir
     task = initial_task or {"task_id": task_id, "status": "pending"}
-    image_stem = _filename_stem(filename_stem or "right-code")
+    image_stem = content_slug(spec.filename_stem or "right-code")
+    image_metadata = {
+        "provider": "Right Code",
+        "model": model,
+        "size": size_label,
+        "operation": "generation",
+        "generated_at": spec.layout.timestamp.isoformat(sep=" ", timespec="seconds"),
+    }
 
     started = monotonic()
     consecutive_poll_errors = 0
-    next_delay = poll_interval
+    next_delay = spec.poll_interval
     while True:
         values = list(_collect_image_values(task))
         if values:
             files = _save_results(
                 values,
-                task_id,
-                output_dir,
                 api_key,
                 transport,
+                spec.layout,
                 filename_stem=image_stem,
-                layout=layout,
                 prompt=prompt,
-                metadata=image_metadata or {"provider": "Right Code", "model": model, "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
+                metadata=image_metadata,
             )
             checkpoint = _write_checkpoint(
                 task_dir,
@@ -482,9 +531,10 @@ def poll_task(
                 model,
                 filename_stem=image_stem,
             )
-            raise RightCodeError(
+            raise BadResponseError(
                 "Right Code poll completed but returned no image URL or base64 data; "
-                f"checkpoint: {checkpoint}"
+                f"checkpoint: {checkpoint}",
+                checkpoint=str(checkpoint),
             )
         if status in FAILED:
             message = _task_error_message(task)
@@ -496,7 +546,10 @@ def poll_task(
                 filename_stem=image_stem,
                 error=message,
             )
-            raise RightCodeError(f"Right Code task failed: {message}; checkpoint: {checkpoint}")
+            raise TaskFailedError(
+                f"Right Code task failed: {message}; checkpoint: {checkpoint}",
+                checkpoint=str(checkpoint),
+            )
         if status and status not in IN_PROGRESS:
             checkpoint = _write_checkpoint(
                 task_dir,
@@ -506,20 +559,23 @@ def poll_task(
                 filename_stem=image_stem,
                 provider_status=status,
             )
-            raise RightCodeError(
+            raise UnknownStatusError(
                 f"Right Code poll returned unknown task status {status!r}; "
-                f"checkpoint: {checkpoint}"
+                f"checkpoint: {checkpoint}",
+                checkpoint=str(checkpoint),
             )
-        if monotonic() - started >= timeout:
+        if monotonic() - started >= spec.timeout:
             checkpoint = _write_checkpoint(
-                output_dir,
+                task_dir,
                 task_id,
                 "timed_out",
                 model,
                 filename_stem=image_stem,
             )
-            raise RightCodeError(
-                f"Right Code task timed out after {timeout:g} seconds; checkpoint: {checkpoint}"
+            raise PollTimeoutError(
+                f"Right Code task timed out after {spec.timeout:g} seconds; "
+                f"checkpoint: {checkpoint}",
+                checkpoint=str(checkpoint),
             )
 
         sleep(next_delay)
@@ -527,9 +583,9 @@ def poll_task(
             task = transport.request_json(
                 "GET", TASK_URL.format(task_id=task_id), api_key, stage="poll"
             )
-        except RightCodeError as exc:
+        except TransientPollError as exc:
             consecutive_poll_errors += 1
-            if consecutive_poll_errors > poll_retries:
+            if consecutive_poll_errors > spec.poll_retries:
                 checkpoint = _write_checkpoint(
                     task_dir,
                     task_id,
@@ -539,9 +595,12 @@ def poll_task(
                     error=str(exc),
                     attempts=consecutive_poll_errors,
                 )
-                raise RightCodeError(f"{exc}; checkpoint: {checkpoint}") from exc
+                raise TransientPollError(
+                    f"{exc}; checkpoint: {checkpoint}",
+                    checkpoint=str(checkpoint),
+                ) from exc
             next_delay = min(
-                max(poll_interval, 1.0) * (2 ** (consecutive_poll_errors - 1)),
+                max(spec.poll_interval, 1.0) * (2 ** (consecutive_poll_errors - 1)),
                 30.0,
             )
             _write_checkpoint(
@@ -552,35 +611,40 @@ def poll_task(
                 filename_stem=image_stem,
                 error=str(exc),
                 retry=consecutive_poll_errors,
-                max_retries=poll_retries,
+                max_retries=spec.poll_retries,
             )
             continue
+        except RightCodeError as exc:
+            # Any other controlled failure (auth, task_failed, ...) stops
+            # immediately; make sure the saved checkpoint is reachable.
+            if exc.checkpoint is None:
+                exc.checkpoint = str(
+                    task_dir.expanduser().resolve()
+                    / f"right-code-task-{_safe_task_id(task_id)}.json"
+                )
+            raise
         consecutive_poll_errors = 0
-        next_delay = poll_interval
+        next_delay = spec.poll_interval
 
 
 def resume_task(
     api_key: str,
     task_id: str,
-    output_dir: Path,
-    poll_interval: float,
-    timeout: float,
+    spec: RunSpec,
+    *,
     model: str = "gpt-image-2.5",
-    filename_stem: Optional[str] = None,
-    poll_retries: int = DEFAULT_POLL_RETRIES,
     transport: Optional[Any] = None,
     sleep: Any = time.sleep,
     monotonic: Any = time.monotonic,
-    task_dir: Optional[Path] = None,
-    layout: Optional[ImageOutputLayout] = None,
 ) -> Dict[str, Any]:
-    task_dir = task_dir or output_dir
-    image_stem = _filename_stem(
-        filename_stem
+    task_dir = spec.task_dir or spec.output_dir
+    image_stem = content_slug(
+        spec.filename_stem
         or _checkpoint_filename_stem(task_dir, task_id)
         or "right-code"
     )
     prompt = _checkpoint_value(task_dir, task_id, "prompt") or image_stem
+    spec = replace(spec, filename_stem=image_stem)
     _write_checkpoint(
         task_dir,
         task_id,
@@ -589,37 +653,26 @@ def resume_task(
         filename_stem=image_stem,
     )
     return poll_task(
-        api_key=api_key,
-        task_id=task_id,
-        output_dir=output_dir,
-        poll_interval=poll_interval,
-        timeout=timeout,
+        api_key,
+        task_id,
+        spec,
         model=model,
-        filename_stem=image_stem,
-        poll_retries=poll_retries,
+        prompt=prompt,
+        size_label=_checkpoint_value(task_dir, task_id, "size") or "",
         transport=transport,
         sleep=sleep,
         monotonic=monotonic,
-        task_dir=task_dir,
-        layout=layout,
-        prompt=prompt,
-        image_metadata={"provider": "Right Code", "model": model, "size": _checkpoint_value(task_dir, task_id, "size") or "", "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
     )
 
 
 def generate(
     api_key: str,
     payload: Dict[str, Any],
-    output_dir: Path,
-    poll_interval: float,
-    timeout: float,
-    filename_stem: Optional[str] = None,
-    poll_retries: int = DEFAULT_POLL_RETRIES,
+    spec: RunSpec,
+    *,
     transport: Optional[Any] = None,
     sleep: Any = time.sleep,
     monotonic: Any = time.monotonic,
-    task_dir: Optional[Path] = None,
-    layout: Optional[ImageOutputLayout] = None,
 ) -> Dict[str, Any]:
     transport = transport or UrlLibTransport()
     model = str(payload.get("model") or "")
@@ -628,11 +681,11 @@ def generate(
     )
     task_id = task.get("task_id")
     if not isinstance(task_id, str) or not task_id:
-        raise RightCodeError("Right Code submit response did not contain a task_id.")
-    image_stem = _filename_stem(
-        filename_stem or str(payload.get("prompt") or "right-code")
-    )
-    task_dir = task_dir or output_dir
+        raise BadResponseError("Right Code submit response did not contain a task_id.")
+    prompt = str(payload.get("prompt") or "")
+    image_stem = content_slug(spec.filename_stem or prompt or "right-code")
+    spec = replace(spec, filename_stem=image_stem)
+    task_dir = spec.task_dir or spec.output_dir
     size_label = " ".join(
         str(part)
         for part in (payload.get("size"), payload.get("imageSize"))
@@ -644,41 +697,29 @@ def generate(
         "submitted",
         model,
         filename_stem=image_stem,
-        prompt=str(payload.get("prompt") or ""),
+        prompt=prompt,
         size=size_label,
     )
     return poll_task(
-        api_key=api_key,
-        task_id=task_id,
-        output_dir=output_dir,
-        poll_interval=poll_interval,
-        timeout=timeout,
+        api_key,
+        task_id,
+        spec,
         model=model,
-        filename_stem=image_stem,
+        prompt=prompt,
+        size_label=size_label,
         initial_task=task,
-        poll_retries=poll_retries,
         transport=transport,
         sleep=sleep,
         monotonic=monotonic,
-        task_dir=task_dir,
-        layout=layout,
-        prompt=str(payload.get("prompt") or ""),
-        image_metadata={"provider": "Right Code", "model": model, "size": size_label, "operation": "generation", "generated_at": layout.timestamp.isoformat(sep=" ", timespec="seconds") if layout else ""},
     )
 
 
 def generate_batch(
     api_key: str,
     payload: Dict[str, Any],
-    output_dir: Path,
+    spec: RunSpec,
     request_count: int,
-    poll_interval: float,
-    timeout: float,
-    filename_stem: Optional[str] = None,
     generate_one: Optional[Callable[..., Dict[str, Any]]] = None,
-    poll_retries: int = DEFAULT_POLL_RETRIES,
-    task_dir: Optional[Path] = None,
-    layout: Optional[ImageOutputLayout] = None,
 ) -> Dict[str, Any]:
     """Run independent single-image tasks sequentially and aggregate their results."""
     if request_count < 1:
@@ -695,21 +736,7 @@ def generate_batch(
         single_payload = dict(payload)
         single_payload["n"] = 1
         try:
-            runner_kwargs = {
-                "api_key": api_key,
-                "payload": single_payload,
-                "output_dir": output_dir,
-                "poll_interval": poll_interval,
-                "timeout": timeout,
-                "task_dir": task_dir,
-                "layout": layout,
-            }
-            if generate_one is None:
-                runner_kwargs["poll_retries"] = poll_retries
-                runner_kwargs["filename_stem"] = filename_stem
-            result = runner(
-                **runner_kwargs
-            )
+            result = runner(api_key, single_payload, spec)
         except RightCodeError as exc:
             message = str(exc)
             errors.append({"request": request_index, "message": message})
@@ -836,7 +863,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ImageOutputLayoutError as exc:
             raise RightCodeError(str(exc)) from exc
         layout.prepare()
-        output_dir = layout.images_dir
+        spec = RunSpec(
+            output_dir=layout.images_dir,
+            layout=layout,
+            task_dir=layout.task_dir,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+            poll_retries=args.poll_retries,
+            filename_stem=args.filename,
+        )
         api_key = read_api_key()
         if args.resume_task_id:
             if args.prompt or args.reference or args.count != 1:
@@ -845,18 +880,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
             if args.output_dir is None:
                 restore_legacy_checkpoint(layout, args.resume_task_id)
-            result = resume_task(
-                api_key=api_key,
-                task_id=args.resume_task_id,
-                output_dir=output_dir,
-                poll_interval=args.poll_interval,
-                timeout=args.timeout,
-                model=args.model,
-                filename_stem=args.filename,
-                poll_retries=args.poll_retries,
-                task_dir=layout.task_dir,
-                layout=layout,
-            )
+            result = resume_task(api_key, args.resume_task_id, spec, model=args.model)
         else:
             if not args.prompt:
                 raise RightCodeError(
@@ -871,33 +895,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 reference_paths=args.reference,
             )
             if args.count == 1:
-                result = generate(
-                    api_key=api_key,
-                    payload=payload,
-                    output_dir=output_dir,
-                    poll_interval=args.poll_interval,
-                    timeout=args.timeout,
-                    filename_stem=args.filename,
-                    poll_retries=args.poll_retries,
-                    task_dir=layout.task_dir,
-                    layout=layout,
-                )
+                result = generate(api_key, payload, spec)
             else:
-                result = generate_batch(
-                    api_key=api_key,
-                    payload=payload,
-                    output_dir=output_dir,
-                    request_count=args.count,
-                    poll_interval=args.poll_interval,
-                    timeout=args.timeout,
-                    filename_stem=args.filename,
-                    poll_retries=args.poll_retries,
-                    task_dir=layout.task_dir,
-                    layout=layout,
-                )
+                result = generate_batch(api_key, payload, spec, args.count)
     except RightCodeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        error: Dict[str, Any] = {
+            "status": "error",
+            "kind": exc.kind,
+            "message": str(exc),
+        }
+        if exc.checkpoint:
+            error["checkpoint"] = exc.checkpoint
+        print(json.dumps(error, ensure_ascii=False))
+        return 3 if exc.kind in RETRYABLE_KINDS else 2
     print(json.dumps(result, ensure_ascii=False))
     return 2 if result.get("status") == "failed" else 0
 
