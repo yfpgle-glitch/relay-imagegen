@@ -12,12 +12,31 @@ Use the bundled `scripts/generate_image.py` with Python 3. RC is the default; le
 ## 1. Generate or edit
 
 ```bash
-python3 scripts/generate_image.py --prompt "一只戴着太空头盔的橘猫"
+python3 scripts/generate_image.py --prompt "一只戴着太空头盔的橘猫" --filename orange-cat-astronaut
 ```
 
-Default: RC, `gpt-image-2.5`, `--size 16:9`, `--image-size 1K`.
+Default: RC, `gpt-image-2.5-flare`, `--size 16:9` (translated to `1536x864`), provider quality `auto`.
 
-`--image-size` is model-dependent: `gpt-image-2-vip` honors 2K/4K (measured 2048x1152 / 3840x2160 at 16:9) and so does `nano-banana-pro`; `gpt-image-2.5` and `gpt-image-2` ignore the tier and render one fixed size per aspect ratio (1672x940 at 16:9). Use `--model gpt-image-2-vip` or `nano-banana-pro` when the user asks for 2K/4K.
+Model names follow the [RC image API documentation](https://docs.rightapi.ai/docs/rc_draw/) (checked 2026-10-15):
+
+| Model | Use |
+|---|---|
+| `gpt-image-2.5-flare` | Default; daily generation, speed priority |
+| `gpt-image-2.5-sunburst` | Prefer for precise editing, multi-image composition and text/detail work |
+| `gpt-image-2` | Base model; quality up to `high` |
+| `gemini-3-pro-image-preview` | Nano Banana Pro; Gemini generation and reference editing |
+| `gemini-nano-banana-2.1` | Nano Banana 2 series; speed priority |
+
+Do not use the old `gpt-image-2.5`, `gpt-image-2-vip` or `nano-banana-*` API names for new submissions. Keep explicit model choices; when the user names an obsolete model, explain the current choices rather than silently substituting one.
+
+Reference prices from the 2026-09 list (top-up 1$ = ¥1.00; the RC console is authoritative): `gpt-image-2` $0.04/image, `gpt-image-2.5-flare` $0.06, `gpt-image-2.5-sunburst` TBC, `gemini-nano-banana-2.1` $0.12, `gemini-3-pro-image-preview` $0.18. README section 6 maps these onto the old model names.
+
+- GPT Image uses pixel `--size`, such as `2048x1152` or `3840x2160`. Width/height must be multiples of 16, at most 3840 each, aspect ratio at most 3:1, and total pixels 655,360–8,294,400. Sizes above 2560x1440 are experimental per RC.
+- Existing ratio syntax remains convenient: `--size 16:9 --image-size 2K` translates locally to `2048x1152`; `4K` translates to `3840x2160`. Other ratios are capped to the pixel limits. Omit `--image-size` with an explicit pixel size; it is not a GPT API field.
+- GPT `--quality` accepts `auto`, `low`, `medium`, `high`; the two 2.5 models also accept `xhigh` and `max`. Use higher quality when requested or needed, not automatically for every image.
+- GPT also supports `--output-format png|jpeg|webp`, `--output-compression 0..100` (jpeg/webp only), and `--moderation auto|low`.
+- Gemini uses aspect-ratio `--size` plus `--image-size 1K|2K|4K` (default `1K`). A tier unsupported by the chosen model may be rejected. GPT-only quality/format options do not apply.
+- Transparent backgrounds, mask-based inpainting and variations are not currently supported by RC. Describe local edits in the prompt; do not promise an alpha cutout.
 
 - Edit through RC by adding one `--reference /absolute/path/image.png` per reference.
 - Use `--count N` for N sequential single-image tasks. Provider field `n` stays 1.
@@ -74,10 +93,16 @@ Outputs use the project-local layout when a project root exists, otherwise the p
 
 The nearest Git/Mercurial root takes precedence over package markers. Pass `--output-dir` to place images anywhere explicitly; never fall back to Downloads, Desktop or agent internal state. An explicit directory keeps hidden `.prompts` and `.tasks` sidecars. Existing artifacts are not deleted. RC still finds legacy `generated_images/.tasks/rightcode` checkpoints.
 
-Prompt records contain the provider, model, size, operation, timestamp and full prompt, without secrets or temporary URLs. Task records may contain temporary image URLs for recovery. Generated artifacts are ignored by the managed output root's `.gitignore`.
+Prompt records contain the provider, model, size, quality (when supplied), operation, timestamp and full prompt, without secrets or temporary URLs. Task records may contain temporary image URLs for recovery. Generated artifacts are ignored by the managed output root's `.gitignore`.
 
 Read final JSON. Display saved originals and link each image and matching prompt file. Report partial failures accurately; a model listing or quote is not a successful generation. Confirm image format and actual dimensions before reporting a live test as successful.
 
 ## 5. RC protocol
 
-Keep asynchronous submission to `https://www.rightapi.ai/draw/v1/images/generations` and polling at `https://www.rightapi.ai/v1/tasks/{task_id}`. Preserve `async: true`, `n: 1`, immediate checkpoints, and completed responses containing URL/base64/inline images even without a status. Download original bytes before presenting results.
+Use `https://www.rightapi.ai` with protocol-specific requests:
+
+- GPT generation: `POST /v1/images/generations`; editing: `POST /v1/images/edits`, with JSON `image` data URLs for local references. Keep `async: true` and `n: 1`.
+- Gemini generation and editing: `POST /v1beta/models/{model}:generateContent`; prompt and reference `inline_data` parts go in `contents`, and ratio/tier in `generationConfig.imageConfig`. Keep `async: true`; generate one image per task (no GPT `n` field).
+- Poll both at `GET /v1/tasks/{task_id}`. Preserve immediate checkpoints. Completed results may omit status: GPT uses `data[].url`, Gemini uses `candidates[].content.parts[].text` URLs. `failed`, `expired` and `canceled` are terminal failures.
+
+RC currently returns URLs, not base64 (`response_format` has no effect). Keep legacy base64/inline response parsing for resumable older tasks. Download original bytes before presenting results.

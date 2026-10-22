@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import mimetypes
 import os
 from dataclasses import dataclass, replace
@@ -29,12 +30,17 @@ from image_output_layout import (
 )
 
 
-SUBMIT_URL = "https://www.rightapi.ai/draw/v1/images/generations"
+SUBMIT_URL = "https://www.rightapi.ai/v1/images/generations"
+EDIT_URL = "https://www.rightapi.ai/v1/images/edits"
+GEMINI_URL = "https://www.rightapi.ai/v1beta/models/{model}:generateContent"
+DEFAULT_MODEL = "gpt-image-2.5-flare"
+OPENAI_MODELS = {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+GEMINI_MODELS = {"gemini-3-pro-image-preview", "gemini-nano-banana-2.1"}
 TASK_URL = "https://www.rightapi.ai/v1/tasks/{task_id}"
 AUTHENTICATED_DOWNLOAD_HOSTS = ("rightapi.ai", "right.codes")
 DEFAULT_KEY_PATH = Path.home() / ".config/right-code/api_key"
 IN_PROGRESS = {"queued", "pending", "processing", "in_progress"}
-FAILED = {"failed", "error", "cancelled", "canceled"}
+FAILED = {"failed", "error", "cancelled", "canceled", "expired"}
 USER_AGENT = "rightcode-image-skill/2.0"
 DEFAULT_POLL_RETRIES = 5
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"}
@@ -252,6 +258,36 @@ def _reference_data_url(path: Path) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def openai_size(size: Optional[str], image_size: Optional[str]) -> str:
+    """Translate the existing ratio/tier CLI to valid OpenAI pixel dimensions."""
+    size = size or "auto"
+    if size == "auto":
+        if image_size:
+            raise RightCodeError("Use an explicit aspect ratio with --image-size; auto size is chosen by the provider.")
+        return size
+    if re.fullmatch(r"[1-9]\d*:[1-9]\d*", size):
+        width, height = map(int, size.split(":"))
+        divisor = math.gcd(width, height)
+        width, height = width // divisor * 16, height // divisor * 16
+        tier = image_size or "1K"
+        if tier not in ("1K", "2K", "4K"):
+            raise RightCodeError("Image size must be 1K, 2K or 4K.")
+        longest = {"1K": 1024 if width == height else 1536, "2K": 2048, "4K": 3840}[tier]
+        scale = min(longest // max(width, height), math.isqrt(8294400 // (width * height)))
+        width, height = width * scale, height * scale
+    elif re.fullmatch(r"[1-9]\d*x[1-9]\d*", size):
+        if image_size:
+            raise RightCodeError("Use either an explicit pixel --size or --image-size, not both.")
+        width, height = map(int, size.split("x"))
+    else:
+        raise RightCodeError("GPT Image size must be auto, WIDTHxHEIGHT, or an aspect ratio such as 16:9.")
+    if (min(width, height) <= 0 or max(width, height) > 3840
+            or width % 16 or height % 16 or max(width, height) > 3 * min(width, height)
+            or not 655360 <= width * height <= 8294400):
+        raise RightCodeError("Invalid GPT Image size: edges must be multiples of 16 up to 3840, aspect ratio <=3:1, and total pixels 655360..8294400.")
+    return f"{width}x{height}"
+
+
 def build_payload(
     prompt: str,
     model: str,
@@ -259,22 +295,55 @@ def build_payload(
     size: Optional[str],
     image_size: Optional[str],
     reference_paths: Sequence[Path],
+    quality: Optional[str] = None,
+    output_format: Optional[str] = None,
+    output_compression: Optional[int] = None,
+    moderation: Optional[str] = None,
 ) -> Dict[str, Any]:
     if count != 1:
         raise RightCodeError(
             "Right Code provider tasks must request a single image; "
             "use batch count to create multiple independent tasks."
         )
+    if model not in OPENAI_MODELS | GEMINI_MODELS:
+        raise RightCodeError(f"Unsupported model {model!r}; use one of: {', '.join(sorted(OPENAI_MODELS | GEMINI_MODELS))}.")
+    if model in GEMINI_MODELS:
+        if any(value is not None for value in (quality, output_format, output_compression, moderation)):
+            raise RightCodeError("Quality, output format/compression and moderation options apply only to GPT Image models.")
+        ratio = size or "16:9"
+        if not re.fullmatch(r"[1-9]\d*:[1-9]\d*", ratio):
+            raise RightCodeError("Gemini --size must be an aspect ratio such as 16:9, not pixel dimensions; model support is checked by RC.")
+        if image_size not in (None, "1K", "2K", "4K"):
+            raise RightCodeError("Gemini --image-size must be 1K, 2K or 4K.")
+        parts: List[Dict[str, Any]] = [{"text": prompt}]
+        for path in reference_paths:
+            header, encoded = _reference_data_url(path).split(",", 1)
+            parts.append({"inline_data": {"mime_type": header[5:].split(";", 1)[0], "data": encoded}})
+        return {
+            "async": True,
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"imageConfig": {"aspectRatio": ratio, "imageSize": image_size or "1K"}},
+        }
+    if quality not in (None, "auto", "low", "medium", "high", "xhigh", "max"):
+        raise RightCodeError("Unsupported quality level.")
+    if model == "gpt-image-2" and quality in {"xhigh", "max"}:
+        raise RightCodeError("xhigh/max quality requires gpt-image-2.5-flare or gpt-image-2.5-sunburst.")
+    if output_format not in (None, "png", "jpeg", "webp"):
+        raise RightCodeError("Output format must be png, jpeg or webp.")
+    if output_compression is not None and (output_format not in {"jpeg", "webp"} or not 0 <= output_compression <= 100):
+        raise RightCodeError("Output compression must be 0..100 and requires jpeg/webp.")
+    if moderation not in (None, "auto", "low"):
+        raise RightCodeError("Moderation must be auto or low.")
     payload: Dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "n": count,
         "async": True,
     }
-    if size:
-        payload["size"] = size
-    if image_size:
-        payload["imageSize"] = image_size
+    payload["size"] = openai_size(size, image_size)
+    for name, value in (("quality", quality), ("output_format", output_format), ("output_compression", output_compression), ("moderation", moderation)):
+        if value is not None:
+            payload[name] = value
     if reference_paths:
         payload["image"] = [_reference_data_url(path) for path in reference_paths]
     return payload
@@ -456,6 +525,7 @@ class RunSpec:
     timeout: float = 600.0
     poll_retries: int = DEFAULT_POLL_RETRIES
     filename_stem: Optional[str] = None
+    model: str = DEFAULT_MODEL
 
 
 def poll_task(
@@ -466,6 +536,8 @@ def poll_task(
     model: str,
     prompt: str = "",
     size_label: str = "",
+    operation: str = "generation",
+    quality: str = "",
     initial_task: Optional[Dict[str, Any]] = None,
     transport: Optional[Any] = None,
     sleep: Any = time.sleep,
@@ -487,7 +559,8 @@ def poll_task(
         "provider": "Right Code",
         "model": model,
         "size": size_label,
-        "operation": "generation",
+        "operation": operation,
+        "quality": quality,
         "generated_at": spec.layout.timestamp.isoformat(sep=" ", timespec="seconds"),
     }
 
@@ -631,12 +704,13 @@ def resume_task(
     task_id: str,
     spec: RunSpec,
     *,
-    model: str = "gpt-image-2.5",
+    model: str = DEFAULT_MODEL,
     transport: Optional[Any] = None,
     sleep: Any = time.sleep,
     monotonic: Any = time.monotonic,
 ) -> Dict[str, Any]:
     task_dir = spec.task_dir or spec.output_dir
+    model = _checkpoint_value(task_dir, task_id, "model") or model
     image_stem = content_slug(
         spec.filename_stem
         or _checkpoint_filename_stem(task_dir, task_id)
@@ -658,6 +732,8 @@ def resume_task(
         model=model,
         prompt=prompt,
         size_label=_checkpoint_value(task_dir, task_id, "size") or "",
+        operation=_checkpoint_value(task_dir, task_id, "operation") or "generation",
+        quality=_checkpoint_value(task_dir, task_id, "quality") or "",
         transport=transport,
         sleep=sleep,
         monotonic=monotonic,
@@ -674,22 +750,29 @@ def generate(
     monotonic: Any = time.monotonic,
 ) -> Dict[str, Any]:
     transport = transport or UrlLibTransport()
-    model = str(payload.get("model") or "")
+    model = str(payload.get("model") or spec.model)
+    if model in GEMINI_MODELS:
+        parts = payload["contents"][0]["parts"]
+        prompt = "\n".join(part["text"] for part in parts if "text" in part)
+        operation = "edit" if any("inline_data" in part for part in parts) else "generation"
+        image_config = payload["generationConfig"]["imageConfig"]
+        size_label = f"{image_config['aspectRatio']} {image_config['imageSize']}"
+        submit_url = GEMINI_URL.format(model=model)
+    else:
+        prompt = str(payload.get("prompt") or "")
+        operation = "edit" if payload.get("image") or payload.get("images") else "generation"
+        size_label = str(payload.get("size") or "")
+        submit_url = EDIT_URL if operation == "edit" else SUBMIT_URL
+    quality = str(payload.get("quality") or "")
     task = transport.request_json(
-        "POST", SUBMIT_URL, api_key, payload, stage="submit"
+        "POST", submit_url, api_key, payload, stage="submit"
     )
     task_id = task.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         raise BadResponseError("Right Code submit response did not contain a task_id.")
-    prompt = str(payload.get("prompt") or "")
     image_stem = content_slug(spec.filename_stem or prompt or "right-code")
     spec = replace(spec, filename_stem=image_stem)
     task_dir = spec.task_dir or spec.output_dir
-    size_label = " ".join(
-        str(part)
-        for part in (payload.get("size"), payload.get("imageSize"))
-        if part
-    )
     _write_checkpoint(
         task_dir,
         task_id,
@@ -698,6 +781,8 @@ def generate(
         filename_stem=image_stem,
         prompt=prompt,
         size=size_label,
+        operation=operation,
+        quality=quality,
     )
     return poll_task(
         api_key,
@@ -706,6 +791,8 @@ def generate(
         model=model,
         prompt=prompt,
         size_label=size_label,
+        operation=operation,
+        quality=quality,
         initial_task=task,
         transport=transport,
         sleep=sleep,
@@ -723,7 +810,7 @@ def generate_batch(
     """Run independent single-image tasks sequentially and aggregate their results."""
     if request_count < 1:
         raise RightCodeError("Batch count must be at least 1.")
-    if payload.get("n") != 1:
+    if payload.get("n", 1 if "contents" in payload else None) != 1:
         raise RightCodeError("Batch payload must keep provider field n fixed at 1.")
 
     runner = generate if generate_one is None else generate_one
@@ -733,7 +820,8 @@ def generate_batch(
 
     for request_index in range(1, request_count + 1):
         single_payload = dict(payload)
-        single_payload["n"] = 1
+        if "contents" not in single_payload:
+            single_payload["n"] = 1
         try:
             result = runner(api_key, single_payload, spec)
         except RightCodeError as exc:
@@ -786,7 +874,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Resume polling an existing task without submitting a new paid task",
     )
     parser.add_argument(
-        "--model", default="gpt-image-2.5", help="Right Code image model (default: gpt-image-2.5)"
+        "--model", default=DEFAULT_MODEL, help=f"Right Code image model (default: {DEFAULT_MODEL})"
     )
     parser.add_argument(
         "--count",
@@ -802,9 +890,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--image-size",
         choices=("1K", "2K", "4K"),
-        default="1K",
-        help="Model resolution (default: 1K)",
+        default=None,
+        help="Gemini resolution tier, or GPT Image ratio-to-pixels convenience tier (default: 1K); omit with explicit pixel --size",
     )
+    parser.add_argument("--quality", choices=("auto", "low", "medium", "high", "xhigh", "max"), help="GPT Image quality (provider default: auto)")
+    parser.add_argument("--output-format", choices=("png", "jpeg", "webp"), help="GPT Image output format (provider default: png)")
+    parser.add_argument("--output-compression", type=int, help="GPT Image jpeg/webp compression, 0..100")
+    parser.add_argument("--moderation", choices=("auto", "low"), help="GPT Image moderation")
     parser.add_argument(
         "--reference",
         action="append",
@@ -867,6 +959,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             timeout=args.timeout,
             poll_retries=args.poll_retries,
             filename_stem=args.filename,
+            model=args.model,
         )
         api_key = read_api_key()
         if args.resume_task_id:
@@ -889,6 +982,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 size=args.size,
                 image_size=args.image_size,
                 reference_paths=args.reference,
+                quality=args.quality,
+                output_format=args.output_format,
+                output_compression=args.output_compression,
+                moderation=args.moderation,
             )
             if args.count == 1:
                 result = generate(api_key, payload, spec)
